@@ -1,0 +1,5 @@
+venv/
+题库/
+*.txt
+*.exe
+_pycache/
