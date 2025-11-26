@@ -552,9 +552,19 @@ def submit_test():
     answers = {}
     for key in request.form:
         if key.startswith('answer_'):
-            question_id = int(key.split('_')[1])
+            parts = key.split('_')
+            # 跳过填空题的子字段（如 answer_123_1）和简答题的图片URL字段
+            if len(parts) > 2 and parts[2].isdigit():
+                continue  # 填空题子字段，跳过
+            if parts[-1] == 'img' and parts[-2] == 'url':
+                continue  # 图片URL字段，跳过
+            question_id = int(parts[1])
+            question = Question.query.get(question_id)
             values = request.form.getlist(key)
-            if len(values) == 1:
+            if question and question.question_type == 'short_answer':
+                # 简答题：直接保存原始内容（可能包含图片标签），不做大写转换
+                answers[question_id] = values[0].strip() if values else ''
+            elif len(values) == 1:
                 answers[question_id] = values[0].strip().upper()
             else:
                 # 多选题，拼接为逗号分隔的大写字母，顺序统一
@@ -608,15 +618,9 @@ def submit_test():
                 cleaned = [s.strip() for s in student_fill_ins if s.strip()]
                 answers[question_id] = '、'.join(cleaned)
         elif question.question_type == 'short_answer':
+            # 简答题答案可能包含HTML标签（图片等），直接获取原始内容
             student_answer = request.form.get(f'answer_{question_id}', '').strip()
-            img_url = request.form.get(f'answer_{question_id}_img_url', '').strip()
-            # 暂时保存简答题信息，稍后创建记录
-            short_answer_data = {
-                'question_id': question_id,
-                'student_answer': student_answer,
-                'image_path': img_url
-            }
-            # 将简答题数据添加到answers字典中
+            # 将简答题数据添加到answers字典中（不进行大小写转换）
             answers[question_id] = student_answer
     # 题目循环结束后，只插入一次TestResult
     ip_addr = request.headers.get('X-Forwarded-For', request.remote_addr)
@@ -696,13 +700,12 @@ def submit_test():
     for question_id, answer in answers.items():
         question = Question.query.get(question_id)
         if question and question.question_type == 'short_answer':
-            # 从answers中获取简答题的图片路径信息
-            img_url = request.form.get(f'answer_{question_id}_img_url', '').strip()
+            # 简答题答案已经包含在 answer 中（可能包含图片标签）
             sa = ShortAnswerSubmission(
                 result_id=result.id,  # 现在可以使用result.id
                 question_id=question_id,
-                student_answer=answer,
-                image_path=img_url
+                student_answer=answer,  # 直接使用答案内容（包含图片标签）
+                image_path=None  # 图片已嵌入答案中，不再单独存储
             )
             db.session.add(sa)
     
