@@ -181,6 +181,12 @@
             document.getElementById('questionForm').reset();
             document.getElementById('question_id').value = '';
             questionModal.show();
+            // 确保图片粘贴功能已初始化
+            setTimeout(() => {
+                document.querySelectorAll('#questionModal textarea.allow-img-paste').forEach(el => {
+                    if (window.attachImagePaste) attachImagePaste(el);
+                });
+            }, 100);
         }
 
         function editQuestion(questionId) {
@@ -207,6 +213,12 @@
                 }
                 
                 questionModal.show();
+                // 确保图片粘贴功能已初始化
+                setTimeout(() => {
+                    document.querySelectorAll('#questionModal textarea.allow-img-paste').forEach(el => {
+                        if (window.attachImagePaste) attachImagePaste(el);
+                    });
+                }, 100);
             });
         }
 

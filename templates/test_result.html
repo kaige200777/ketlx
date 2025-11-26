@@ -1,4 +1,4 @@
-p<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -11,7 +11,11 @@ p<!DOCTYPE html>
         <div class="container">
             <a class="navbar-brand" href="#">课堂练习评估系统</a>
             <div class="navbar-text text-light">
+                {% if is_teacher %}
+                查看学生答题详情 | 学生：{{ result.student_name }} | 班级：{{ result.class_number }}
+                {% else %}
                 学生：{{ student.name }} | 班级：{{ student.class_number }}
+                {% endif %}
             </div>
         </div>
     </nav>
@@ -36,13 +40,17 @@ p<!DOCTYPE html>
                         <div class="card">
                             <div class="card-body">
                                 <h5 class="card-title">历史成绩</h5>
+                                {% if history %}
                                 <p class="card-text">参加测试次数：{{ history.test_count }}</p>
                                 <p class="card-text">平均分：{{ "%.2f"|format(history.average_score) }}</p>
                                 <p class="card-text">最高分：{{ history.highest_score }}</p>
                                 <p class="card-text">最低分：{{ history.lowest_score }}</p>
+                                {% else %}
+                                <p class="card-text text-muted">暂无历史记录</p>
+                                {% endif %}
+                            </div>
+                        </div>
                     </div>
-                </div>
-            </div>
         </div>
 
                 <h4 class="mb-3">答题详情</h4>
@@ -108,7 +116,11 @@ p<!DOCTYPE html>
                 {% endfor %}
 
                 <div class="text-center mt-4">
+                    {% if is_teacher %}
+                    <a href="{{ url_for('get_test_statistics', test_id=test_id) }}" class="btn btn-primary">返回统计页面</a>
+                    {% else %}
                     <a href="{{ url_for('student_dashboard') }}" class="btn btn-primary">返回首页</a>
+                    {% endif %}
                 </div>
             </div>
         </div>

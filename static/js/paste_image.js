@@ -5,6 +5,9 @@
  */
 function attachImagePaste(element) {
     if (!element) return;
+    // 防止重复添加事件监听器
+    if (element.dataset.imagePasteAttached === 'true') return;
+    element.dataset.imagePasteAttached = 'true';
     element.addEventListener('paste', async function (e) {
         if (!e.clipboardData) return;
         const items = Array.from(e.clipboardData.items || []);

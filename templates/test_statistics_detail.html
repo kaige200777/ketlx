@@ -95,7 +95,7 @@
                     {% for stu in students %}
                     <tr>
                         <td>{{ loop.index }}</td>
-                        <td>{{ stu.name }}</td>
+                        <td><a href="{{ url_for('test_result', result_id=stu.result_id) }}" target="_blank" class="text-primary text-decoration-none">{{ stu.name }}</a></td>
                         <td>{{ stu.score }}</td>
                         <td>{{ stu.submit_time }}</td>
                         <td>{{ stu.ip }}</td>

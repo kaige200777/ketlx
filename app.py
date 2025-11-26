@@ -937,7 +937,8 @@ def get_test_statistics(test_id):
             'name': result.student_name,
             'score': result.score,
             'submit_time': to_bj(result.created_at).strftime('%Y-%m-%d %H:%M:%S'),
-            'ip': result.ip_address
+            'ip': result.ip_address,
+            'result_id': result.id
         })
     # 计算每个班级的统计数据
     statistics = []
@@ -1085,25 +1086,43 @@ def clear_questions(question_type):
 
 @app.route('/test_result/<int:result_id>')
 def test_result(result_id):
-    if 'student_id' not in session:
-        return redirect(url_for('student_start'))
-    
     # 获取测试结果
     result = TestResult.query.get_or_404(result_id)
-    if result.student_id != session['student_id']:
+    
+    # 检查权限：学生只能查看自己的，教师可以查看所有
+    if 'role' not in session:
+        return redirect(url_for('student_start'))
+    
+    if session.get('role') == 'teacher':
+        # 教师可以查看所有学生的答题详情
+        pass
+    elif session.get('role') == 'student':
+        # 学生只能查看自己的
+        if 'student_id' not in session or result.student_id != session['student_id']:
+            flash('无权访问此测试结果')
+            return redirect(url_for('student_dashboard'))
+    else:
         flash('无权访问此测试结果')
-        return redirect(url_for('student_dashboard'))
+        return redirect(url_for('student_start'))
     
     # 获取测试信息
     test = Test.query.get(result.test_id)
     
     # 获取学生信息
-    student = User.query.get(session['student_id'])
-    
-    # 获取学生历史记录
-    history = StudentTestHistory.query.filter_by(
-        student_id=session['student_id']
-    ).first()
+    if session.get('role') == 'teacher':
+        # 教师查看时，从 result 中获取学生信息
+        student_id = result.student_id
+        student = User.query.get(student_id)
+        # 教师查看时也获取学生历史记录
+        history = StudentTestHistory.query.filter_by(
+            student_id=student_id
+        ).first()
+    else:
+        # 学生查看自己的
+        student = User.query.get(session['student_id'])
+        history = StudentTestHistory.query.filter_by(
+            student_id=session['student_id']
+        ).first()
     
     # 获取题目详情
     questions = []
@@ -1154,7 +1173,9 @@ def test_result(result_id):
                          result=result,
                          student=student,
                          history=history,
-                         questions=questions)
+                         questions=questions,
+                         is_teacher=session.get('role') == 'teacher',
+                         test_id=test.id if test else None)
 
 @app.route('/student_dashboard')
 def student_dashboard():
