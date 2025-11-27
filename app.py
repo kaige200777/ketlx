@@ -231,13 +231,14 @@ def teacher_dashboard():
 def import_questions():
     if 'role' not in session or session['role'] != 'teacher':
         return redirect(url_for('teacher_login'))
+    question_type = request.form.get('question_type', 'single_choice')  # 获取题型，用于错误重定向
     if 'csv_file' not in request.files:
         flash('请选择文件')
-        return redirect(url_for('teacher_dashboard'))
+        return redirect(url_for('teacher_dashboard', question_type=question_type))
     file = request.files['csv_file']
     if file.filename == '':
         flash('请选择文件')
-        return redirect(url_for('teacher_dashboard'))
+        return redirect(url_for('teacher_dashboard', question_type=question_type))
     if file and (file.filename.endswith('.csv') or file.filename.endswith('.xlsx')):
         try:
             session['last_import_filename'] = file.filename
@@ -246,7 +247,7 @@ def import_questions():
             bank_name = request.form.get('bank_name') or file.filename
             if not question_type:
                 flash('请选择题目类型')
-                return redirect(url_for('teacher_dashboard'))
+                return redirect(url_for('teacher_dashboard', question_type='single_choice'))
             # 新建题库
             bank = QuestionBank(name=bank_name, question_type=question_type)
             db.session.add(bank)
@@ -264,14 +265,14 @@ def import_questions():
                         continue
                 if df is None:
                     flash('无法读取CSV文件，请检查文件编码')
-                    return redirect(url_for('teacher_dashboard'))
+                    return redirect(url_for('teacher_dashboard', question_type=question_type))
             elif file.filename.endswith('.xlsx'):
                 try:
                     file.seek(0)
                     df = pd.read_excel(file)
                 except Exception as e:
                     flash(f'无法读取Excel文件：{str(e)}')
-                    return redirect(url_for('teacher_dashboard'))
+                    return redirect(url_for('teacher_dashboard', question_type=question_type))
             # 根据题目类型设置列名映射
             if question_type == 'single_choice':
                 column_mapping = {
@@ -329,7 +330,7 @@ def import_questions():
             missing_columns = [col for col in column_mapping.keys() if col not in actual_columns]
             if missing_columns:
                 flash(f'CSV文件缺少必要的列：{", ".join(missing_columns)}')
-                return redirect(url_for('teacher_dashboard'))
+                return redirect(url_for('teacher_dashboard', question_type=question_type))
             # 导入题目
             for _, row in df.iterrows():
                 question = Question(
@@ -348,12 +349,15 @@ def import_questions():
                 db.session.add(question)
             db.session.commit()
             flash('题库导入成功')
+            # 导入成功后，重定向时携带题型参数，以便前端自动切换到对应选项卡
+            return redirect(url_for('teacher_dashboard', question_type=question_type))
         except Exception as e:
             flash(f'导入失败：{str(e)}')
             db.session.rollback()
+            return redirect(url_for('teacher_dashboard', question_type=question_type))
     else:
         flash('请上传CSV或Excel(XLSX)文件')
-    return redirect(url_for('teacher_dashboard'))
+    return redirect(url_for('teacher_dashboard', question_type=question_type))
 
 @app.route('/set_test_params', methods=['POST'])
 def set_test_params():
@@ -1254,7 +1258,13 @@ def export_questions(question_type):
             data.append([
                 q.content, q.correct_answer, q.score, q.explanation
             ])
-    else:
+    elif question_type == 'short_answer':
+        columns = ['题干', '参考答案', '分值', '解析']
+        for q in questions:
+            data.append([
+                q.content, q.correct_answer, q.score, q.explanation
+            ])
+    else:  # fill_blank
         columns = ['题干', '正确答案', '分值', '解析']
         for q in questions:
             data.append([
@@ -1550,7 +1560,11 @@ def export_bank(bank_id):
         columns = ['题干', '正确答案', '分值', '解析']
         for q in questions:
             data.append([q.content, q.correct_answer, q.score, q.explanation])
-    else:  # fill_blank 或 short_answer
+    elif qtype == 'short_answer':
+        columns = ['题干', '参考答案', '分值', '解析']
+        for q in questions:
+            data.append([q.content, q.correct_answer, q.score, q.explanation])
+    else:  # fill_blank
         columns = ['题干', '正确答案', '分值', '解析']
         for q in questions:
             data.append([q.content, q.correct_answer, q.score, q.explanation])

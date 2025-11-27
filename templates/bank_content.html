@@ -41,7 +41,7 @@
                             {% if bank.question_type in ['single_choice', 'multiple_choice'] %}
                             <th>选项</th>
                             {% endif %}
-                            <th style="width: 120px">正确答案</th>
+                            <th style="width: 120px">{% if bank.question_type == 'short_answer' %}参考答案{% else %}正确答案{% endif %}</th>
                             <th style="width: 80px">分值</th>
                             <th style="width: 120px">操作</th>
                         </tr>
@@ -117,7 +117,11 @@
                         </div>
                         {% endif %}
                         <div class="mb-3">
+                            {% if bank.question_type == 'short_answer' %}
+                            <label for="correct_answer" class="form-label">参考答案</label>
+                            {% else %}
                             <label for="correct_answer" class="form-label">正确答案</label>
+                            {% endif %}
                             {% if bank.question_type == 'single_choice' %}
                             <select class="form-control" id="correct_answer" name="correct_answer" required>
                                 <option value="A">A</option>

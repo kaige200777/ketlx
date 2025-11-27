@@ -306,6 +306,29 @@
         let currentType = 'single_choice';
         let bankData = {};
 
+        // 检查 URL 参数，如果有 question_type 参数，自动切换到对应选项卡
+        function initCurrentType() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const questionType = urlParams.get('question_type');
+            if (questionType && ['single_choice', 'multiple_choice', 'true_false', 'fill_blank', 'short_answer'].includes(questionType)) {
+                currentType = questionType;
+                // 更新导入类型输入框
+                document.getElementById('importTypeInput').value = questionType;
+                // 切换选项卡 - 直接触发对应按钮的点击事件
+                const targetButton = document.querySelector(`#bankTypeTabs button[data-type="${questionType}"]`);
+                if (targetButton) {
+                    // 移除所有活动状态
+                    document.querySelectorAll('#bankTypeTabs button').forEach(btn => {
+                        btn.classList.remove('active');
+                    });
+                    // 激活目标选项卡
+                    targetButton.classList.add('active');
+                    // 直接设置并渲染，避免重复点击
+                    renderBankList();
+                }
+            }
+        }
+
         function loadBankList() {
             fetch('/api/question_banks').then(r=>r.json()).then(data => {
                 bankData = data;
@@ -522,6 +545,7 @@
         loadPresets();
 
         // 初始化
+        initCurrentType();  // 先检查URL参数，设置当前题型
         loadBankList();
         calculateTotalScore();
 
