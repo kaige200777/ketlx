@@ -24,7 +24,9 @@ MAX_IMG_SIZE = 2 * 1024 * 1024
 BJ_OFFSET = timedelta(hours=8)
 
 def to_bj(dt: datetime):
-    """Convert naive UTC datetime stored in DB to Beijing time"""
+    """
+    Convert naive UTC datetime stored in DB to Beijing time
+    """
     return (dt + BJ_OFFSET) if dt else dt
 
 # Jinja 过滤器函数
@@ -183,6 +185,47 @@ def shuffle_options(question):
         'correct_answer': question.correct_answer,
         'original_correct_answer': question.correct_answer
     }
+
+# 初始化数据库
+def init_db():
+    """
+    初始化数据库，创建所有表和默认数据
+    
+    功能：
+    1. 创建所有数据库表
+    2. 创建默认教师账户（如果不存在）
+    3. 提供错误处理和日志记录
+    
+    Returns:
+        bool: 初始化是否成功
+    """
+    try:
+        with app.app_context():
+            # 创建所有表
+            db.create_all()
+            print("✓ 数据库表创建成功")
+            
+            # 检查并创建默认教师账户
+            admin = User.query.filter_by(username='admin', role='teacher').first()
+            if not admin:
+                admin = User(username='admin', role='teacher')
+                admin.set_password('admin')
+                db.session.add(admin)
+                db.session.commit()
+                print("✓ 默认教师账户创建成功 (用户名: admin, 密码: admin)")
+                print("⚠ 警告：请在首次登录后立即修改默认密码！")
+            else:
+                print("✓ 默认教师账户已存在")
+            
+            print("✓ 数据库初始化完成")
+            return True
+            
+    except Exception as e:
+        print(f"✗ 数据库初始化失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+
 # 路由
 @app.route('/')
 def index():
@@ -194,12 +237,22 @@ def teacher_login():
         username = request.form.get('username')
         password = request.form.get('password')
         
+        # 添加调试信息
+        print(f"登录尝试：用户名={username}, 密码={password}")
+        
         user = User.query.filter_by(username=username, role='teacher').first()
+        print(f"查询到的用户：{user}")
+        
+        if user:
+            print(f"用户存在，密码验证：{user.check_password(password)}")
+        
         if user and user.check_password(password):
             session['user_id'] = user.id
             session['role'] = 'teacher'
+            print(f"登录成功，重定向到teacher_dashboard")
             return redirect(url_for('teacher_dashboard'))
         flash('用户名或密码错误', 'login_error')
+        print(f"登录失败，用户名或密码错误")
     return render_template('teacher_login.html')
 
 @app.route('/teacher/dashboard')
@@ -227,176 +280,28 @@ def teacher_dashboard():
                          last_import_filename=session.get('last_import_filename'),
                          last_import_filepath=session.get('last_import_filepath'))
 
-@app.route('/import_questions', methods=['POST'])
-def import_questions():
-    if 'role' not in session or session['role'] != 'teacher':
-        return redirect(url_for('teacher_login'))
-    question_type = request.form.get('question_type', 'single_choice')  # 获取题型，用于错误重定向
-    if 'csv_file' not in request.files:
-        flash('请选择文件')
-        return redirect(url_for('teacher_dashboard', question_type=question_type))
-    file = request.files['csv_file']
-    if file.filename == '':
-        flash('请选择文件')
-        return redirect(url_for('teacher_dashboard', question_type=question_type))
-    if file and (file.filename.endswith('.csv') or file.filename.endswith('.xlsx')):
-        try:
-            session['last_import_filename'] = file.filename
-            session['last_import_filepath'] = getattr(file, 'stream', None) and getattr(file.stream, 'name', None) or ''
-            question_type = request.form.get('question_type')
-            bank_name = request.form.get('bank_name') or file.filename
-            if not question_type:
-                flash('请选择题目类型')
-                return redirect(url_for('teacher_dashboard', question_type='single_choice'))
-            # 新建题库
-            bank = QuestionBank(name=bank_name, question_type=question_type)
-            db.session.add(bank)
-            db.session.commit()
-            # 读取文件并导入题目（与原逻辑一致，但需加bank_id）
-            df = None
-            if file.filename.endswith('.csv'):
-                encodings = ['utf-8', 'gbk', 'gb2312', 'gb18030']
-                for encoding in encodings:
-                    try:
-                        file.seek(0)
-                        df = pd.read_csv(file, encoding=encoding)
-                        break
-                    except UnicodeDecodeError:
-                        continue
-                if df is None:
-                    flash('无法读取CSV文件，请检查文件编码')
-                    return redirect(url_for('teacher_dashboard', question_type=question_type))
-            elif file.filename.endswith('.xlsx'):
-                try:
-                    file.seek(0)
-                    df = pd.read_excel(file)
-                except Exception as e:
-                    flash(f'无法读取Excel文件：{str(e)}')
-                    return redirect(url_for('teacher_dashboard', question_type=question_type))
-            # 根据题目类型设置列名映射
-            if question_type == 'single_choice':
-                column_mapping = {
-                    '题干': ['题干', '题目', '问题'],
-                    '选项A': ['选项A', 'A选项', 'A'],
-                    '选项B': ['选项B', 'B选项', 'B'],
-                    '选项C': ['选项C', 'C选项', 'C'],
-                    '选项D': ['选项D', 'D选项', 'D'],
-                    '正确答案': ['正确答案', '答案', '正确答案选项'],
-                    '分值': ['分值', '分数', '得分'],
-                    '解析': ['解析', '答案解析', '解释']
-                }
-            elif question_type == 'multiple_choice':
-                column_mapping = {
-                    '题干': ['题干', '题目', '问题'],
-                    '选项A': ['选项A', 'A选项', 'A'],
-                    '选项B': ['选项B', 'B选项', 'B'],
-                    '选项C': ['选项C', 'C选项', 'C'],
-                    '选项D': ['选项D', 'D选项', 'D'],
-                    '选项E': ['选项E', 'E选项', 'E'],
-                    '正确答案': ['正确答案', '答案', '正确答案选项'],
-                    '分值': ['分值', '分数', '得分'],
-                    '解析': ['解析', '答案解析', '解释']
-                }
-            elif question_type == 'true_false':
-                column_mapping = {
-                    '题干': ['题干', '题目', '问题'],
-                    '正确答案': ['正确答案', '答案', '正确答案选项'],
-                    '分值': ['分值', '分数', '得分'],
-                    '解析': ['解析', '答案解析', '解释']
-                }
-            elif question_type == 'short_answer':
-                # 简答题：题目内容、学生答案可包含富文本/图片；分值和解析可选
-                column_mapping = {
-                    '题干': ['题目内容', '题干', '题目', '问题', '内容'],
-                    '正确答案': ['学生答案', '学生答题', '参考答案', '答案'],
-                    '分值': ['分值', '分数', '得分'],
-                    '解析': ['解析', '答案解析', '解释']
-                }
-            else:  # fill_blank
-                column_mapping = {
-                    '题干': ['题干', '题目', '问题'],
-                    '正确答案': ['正确答案', '答案', '参考答案'],
-                    '分值': ['分值', '分数', '得分'],
-                    '解析': ['解析', '答案解析', '解释']
-                }
-            # 查找实际列名
-            actual_columns = {}
-            for standard_name, possible_names in column_mapping.items():
-                for name in possible_names:
-                    if name in df.columns:
-                        actual_columns[standard_name] = name
-                        break
-            # 检查是否找到所有必要的列
-            missing_columns = [col for col in column_mapping.keys() if col not in actual_columns]
-            if missing_columns:
-                flash(f'CSV文件缺少必要的列：{", ".join(missing_columns)}')
-                return redirect(url_for('teacher_dashboard', question_type=question_type))
-            # 导入题目
-            for _, row in df.iterrows():
-                question = Question(
-                    question_type=question_type,
-                    content=row[actual_columns['题干']],
-                    option_a=row[actual_columns['选项A']] if '选项A' in actual_columns else None,
-                    option_b=row[actual_columns['选项B']] if '选项B' in actual_columns else None,
-                    option_c=row[actual_columns['选项C']] if '选项C' in actual_columns else None,
-                    option_d=row[actual_columns['选项D']] if '选项D' in actual_columns else None,
-                    option_e=row[actual_columns['选项E']] if '选项E' in actual_columns else None,
-                    correct_answer=row[actual_columns['正确答案']],
-                    score=int(row[actual_columns['分值']]) if '分值' in actual_columns else 0,
-                    explanation=row[actual_columns['解析']] if '解析' in actual_columns else None,
-                    bank_id=bank.id
-                )
-                db.session.add(question)
-            db.session.commit()
-            flash('题库导入成功')
-            # 导入成功后，重定向时携带题型参数，以便前端自动切换到对应选项卡
-            return redirect(url_for('teacher_dashboard', question_type=question_type))
-        except Exception as e:
-            flash(f'导入失败：{str(e)}')
-            db.session.rollback()
-            return redirect(url_for('teacher_dashboard', question_type=question_type))
-    else:
-        flash('请上传CSV或Excel(XLSX)文件')
-    return redirect(url_for('teacher_dashboard', question_type=question_type))
 
-@app.route('/set_test_params', methods=['POST'])
-def set_test_params():
+@app.route('/teacher/bank/<int:bank_id>')
+def teacher_bank(bank_id):
+    """题库详情页面 - 查看和编辑题库中的题目"""
     if 'role' not in session or session['role'] != 'teacher':
         return redirect(url_for('teacher_login'))
-    try:
-        # 先将所有旧测试设为不激活
-        Test.query.update({'is_active': False})
-        db.session.commit()
-        # 计算总分
-        total_score = (
-            int(request.form.get('single_choice_count', 0)) * int(request.form.get('single_choice_score', 0)) +
-            int(request.form.get('multiple_choice_count', 0)) * int(request.form.get('multiple_choice_score', 0)) +
-            int(request.form.get('true_false_count', 0)) * int(request.form.get('true_false_score', 0)) +
-            int(request.form.get('fill_blank_count', 0)) * int(request.form.get('fill_blank_score', 0)) +
-            int(request.form.get('short_answer_count', 0)) * int(request.form.get('short_answer_score', 0))
-        )
-        test = Test(
-            title=request.form.get('test_title'),
-            single_choice_count=int(request.form.get('single_choice_count', 0)),
-            multiple_choice_count=int(request.form.get('multiple_choice_count', 0)),
-            true_false_count=int(request.form.get('true_false_count', 0)),
-            fill_blank_count=int(request.form.get('fill_blank_count', 0)),
-            short_answer_count=int(request.form.get('short_answer_count', 0)),
-            single_choice_score=int(request.form.get('single_choice_score', 0)),
-            multiple_choice_score=int(request.form.get('multiple_choice_score', 0)),
-            true_false_score=int(request.form.get('true_false_score', 0)),
-            fill_blank_score=int(request.form.get('fill_blank_score', 0)),
-            short_answer_score=int(request.form.get('short_answer_score', 0)),
-            total_score=total_score,
-            is_active=True
-        )
-        db.session.add(test)
-        db.session.commit()
-        flash('测试参数设置成功')
-    except Exception as e:
-        flash(f'设置失败：{str(e)}')
-        db.session.rollback()
-    return redirect(url_for('teacher_dashboard'))
+    
+    bank = QuestionBank.query.get_or_404(bank_id)
+    questions = Question.query.filter_by(bank_id=bank_id).order_by(Question.id).all()
+    
+    # 添加题型显示名称
+    type_display_map = {
+        'single_choice': '单选题',
+        'multiple_choice': '多选题',
+        'true_false': '判断题',
+        'fill_blank': '填空题',
+        'short_answer': '简答题'
+    }
+    bank.question_type_display = type_display_map.get(bank.question_type, bank.question_type)
+    
+    return render_template('bank_content.html', bank=bank, questions=questions)
+
 
 @app.route('/student/start', methods=['GET', 'POST'])
 def student_start():
@@ -409,6 +314,24 @@ def student_start():
             flash('姓名和班级号不能为空')
             return render_template('student_start.html')
         
+        # 在创建学生账户前，先检查是否有可用的测试
+        if test_content:
+            # 学生选择了预设
+            preset = TestPreset.query.get(test_content)
+            if not preset:
+                flash('选择的测试内容不存在，请联系管理员')
+                return render_template('student_start.html')
+        else:
+            # 学生没有选择，检查是否有激活的测试
+            current_test = Test.query.filter_by(is_active=True).first()
+            if not current_test:
+                # 如果没有激活的测试，尝试获取最新的测试
+                current_test = Test.query.order_by(Test.created_at.desc()).first()
+            
+            if not current_test:
+                flash('当前没有可用的测试，请联系管理员')
+                return render_template('student_start.html')
+        
         username = f"{name}_{class_number}"
         student = User.query.filter_by(username=username, role='student').first()
         if not student:
@@ -420,6 +343,7 @@ def student_start():
         session['student_id'] = student.id
         session['student_name'] = name
         session['class_number'] = class_number
+        session['role'] = 'student'  # 明确设置学生角色
         session['selected_preset_id'] = test_content if test_content else None  # 新增：存储选择的预设ID
         
         return redirect(url_for('test'))
@@ -473,7 +397,7 @@ def test():
             current_test = Test.query.order_by(Test.created_at.desc()).first()
             
         if not current_test:
-            flash('当前没有可用的测试，请联系教师')
+            flash('当前没有可用的测试，请联系管理员')
             return redirect(url_for('student_start'))
         
         # 确保所有必要的字段都有默认值
@@ -744,148 +668,46 @@ def submit_test():
     
     return redirect(url_for('student_dashboard'))
 
-@app.route('/api/question/<int:question_id>', methods=['GET'])
-def get_question_api(question_id):
-    if 'role' not in session or session['role'] != 'teacher':
-        return jsonify({'error': 'Unauthorized'}), 401
+@app.route('/student_dashboard')
+def student_dashboard():
+    if 'student_id' not in session:
+        return redirect(url_for('student_start'))
     
-    question = Question.query.get_or_404(question_id)
-    return jsonify({
-        'id': question.id,
-        'content': question.content,
-        'option_a': question.option_a,
-        'option_b': question.option_b,
-        'option_c': question.option_c,
-        'option_d': question.option_d,
-        'correct_answer': question.correct_answer,
-        'score': question.score,
-        'question_type': question.question_type
-    })
-
-@app.route('/api/question/<question_id>', methods=['POST', 'DELETE'])
-def manage_question(question_id):
-    if 'role' not in session or session['role'] != 'teacher':
-        return jsonify({'error': 'Unauthorized'}), 401
+    # 获取学生信息
+    student = User.query.get(session['student_id'])
     
-    if request.method == 'DELETE':
-        question = Question.query.get_or_404(question_id)
-        db.session.delete(question)
+    # 获取当前测试
+    current_test = Test.query.filter_by(is_active=True).first()
+    
+    # 获取学生历史记录
+    history = StudentTestHistory.query.filter_by(
+        student_id=session['student_id']
+    ).first()
+    
+    if not history:
+        history = StudentTestHistory(
+            student_id=session['student_id'],
+            student_name=session.get('student_name', ''),
+            class_number=session.get('class_number', ''),
+            test_count=0,
+            total_score=0,
+            average_score=0.0,
+            highest_score=0,
+            lowest_score=0
+        )
+        db.session.add(history)
         db.session.commit()
-        return jsonify({'success': True})
     
-    # POST method - create or update question
-    form = request.form
-    if question_id == 'new':
-        question = Question()
-        question.bank_id = form.get('bank_id', type=int)
-        question.question_type = form.get('question_type')
-        db.session.add(question)
-    else:
-        question = Question.query.get_or_404(question_id)
+    # 获取学生的测试结果
+    test_results = TestResult.query.filter_by(
+        student_id=session['student_id']
+    ).order_by(TestResult.created_at.desc()).all()
     
-    question.content = form.get('content')
-    question.correct_answer = form.get('correct_answer')
-    question.score = form.get('score')
-    if form.get('image_path') is not None:
-        question.image_path = form.get('image_path')
-    
-    if question.question_type in ['single_choice', 'multiple_choice']:
-        question.option_a = form.get('option_a')
-        question.option_b = form.get('option_b')
-        question.option_c = form.get('option_c')
-        question.option_d = form.get('option_d')
-    
-    db.session.commit()
-    return jsonify({'success': True})
-
-@app.route('/edit_question', methods=['POST'])
-def edit_question():
-    if 'role' not in session or session['role'] != 'teacher':
-        flash('未授权')
-        return redirect(url_for('teacher_login'))
-    try:
-        question_id = request.form.get('question_id')
-        if not question_id:
-            flash('题目ID不能为空')
-            return redirect(url_for('teacher_dashboard'))
-        question = Question.query.get_or_404(question_id)
-
-        # 始终更新题干内容
-        content = request.form.get('content')
-        if content is not None:
-            question.content = content
-
-        question_type = request.form.get('question_type')
-        if question_type:
-            question.question_type = question_type
-        try:
-            score = int(request.form.get('score', 0))
-            if score > 0:
-                question.score = score
-        except ValueError:
-            flash('分值必须是整数')
-            return redirect(url_for('teacher_dashboard'))
-        question.explanation = request.form.get('explanation', '')
-        if question_type in ['single_choice', 'multiple_choice']:
-            question.option_a = request.form.get('option_a', '')
-            question.option_b = request.form.get('option_b', '')
-            question.option_c = request.form.get('option_c', '')
-            question.option_d = request.form.get('option_d', '')
-            question.option_e = request.form.get('option_e', '') if question_type == 'multiple_choice' else None
-            if request.form.get('correct_answer'):
-                question.correct_answer = request.form.get('correct_answer').upper()
-        elif question_type == 'true_false':
-            if request.form.get('correct_answer'):
-                question.correct_answer = request.form.get('correct_answer')
-        else:
-            if request.form.get('correct_answer'):
-                question.correct_answer = request.form.get('correct_answer')
-        db.session.commit()
-        flash('题目修改成功')
-    except Exception as e:
-        db.session.rollback()
-        flash(f'修改失败：{str(e)}')
-    return redirect(url_for('teacher_dashboard'))
-
-@app.route('/change_password', methods=['POST'])
-def change_password():
-    if 'role' not in session or session['role'] != 'teacher':
-        flash('未授权')
-        return redirect(url_for('teacher_login'))
-    
-    if 'user_id' not in session:
-        flash('请先登录')
-        return redirect(url_for('teacher_login'))
-    
-    user = User.query.get(session['user_id'])
-    if not user:
-        flash('用户不存在')
-        return redirect(url_for('teacher_login'))
-    
-    current_password = request.form.get('current_password')
-    new_password = request.form.get('new_password')
-    confirm_password = request.form.get('confirm_password')
-    
-    # 验证当前密码是否正确
-    if not user.check_password(current_password):
-        flash('当前密码错误')
-        return redirect(url_for('teacher_dashboard'))
-    
-    # 验证新密码
-    if new_password != confirm_password:
-        flash('两次输入的新密码不一致')
-        return redirect(url_for('teacher_dashboard'))
-    
-    # 更新密码
-    try:
-        user.set_password(new_password)
-        db.session.commit()
-        flash('密码修改成功')
-    except Exception as e:
-        db.session.rollback()
-        flash(f'密码修改失败：{str(e)}')
-    
-    return redirect(url_for('teacher_dashboard'))
+    return render_template('student_dashboard.html',
+                         student=student,
+                         current_test=current_test,
+                         history=history,
+                         test_results=test_results)
 
 @app.route('/test_statistics')
 def test_statistics():
@@ -898,20 +720,6 @@ def test_statistics():
         cnt = TestResult.query.filter_by(test_id=t.id).count()
         data.append({'test': t, 'count': cnt})
     return render_template('test_statistics.html', tests=data) 
-
-@app.route('/delete_test/<int:test_id>', methods=['POST'])
-def delete_test(test_id):
-    if 'role' not in session or session['role'] != 'teacher':
-        return redirect(url_for('teacher_login'))
-    try:
-        TestResult.query.filter_by(test_id=test_id).delete()
-        Test.query.filter_by(id=test_id).delete()
-        db.session.commit()
-        flash('测试删除成功')
-    except Exception as e:
-        db.session.rollback()
-        flash(f'删除失败：{e}')
-    return redirect(url_for('test_statistics'))
 
 @app.route('/test_statistics/<int:test_id>')
 def get_test_statistics(test_id):
@@ -1021,75 +829,37 @@ def get_test_statistics(test_id):
     top_error_questions = error_questions[:10]
     return render_template('test_statistics_detail.html', statistics=statistics, class_students=class_students, top_error_questions=top_error_questions)
 
-@app.route('/test_statistics/<int:test_id>/students')
-def get_test_students(test_id):
-    if 'role' not in session or session['role'] != 'teacher':
-        return jsonify({'error': '未授权'}), 401
-    
-    # 获取指定考试的所有成绩
-    results = TestResult.query.filter_by(test_id=test_id).order_by(TestResult.class_number, TestResult.student_name).all()
-    
-    # 按班级分组
-    class_groups = {}
-    for result in results:
-        if result.class_number not in class_groups:
-            class_groups[result.class_number] = []
-        
-        class_groups[result.class_number].append({
-            'name': result.student_name,
-            'score': result.score,
-            'submit_time': to_bj(result.created_at).strftime('%Y-%m-%d %H:%M:%S'),
-            'ip': result.ip_address
-        })
-    
-    # 转换为列表格式
-    statistics = []
-    for class_number, students in sorted(class_groups.items()):
-        statistics.append({
-            'class_number': class_number,
-            'students': sorted(students, key=lambda x: (-x['score'], x['name']))  # 按分数降序，姓名升序排序
-        })
-    
-    return jsonify(statistics)
 
-@app.route('/initialize_data', methods=['POST'])
-def initialize_data():
+@app.route('/delete_test/<int:test_id>', methods=['POST'])
+def delete_test(test_id):
+    """删除测试及其所有相关数据"""
     if 'role' not in session or session['role'] != 'teacher':
-        return jsonify({'success': False, 'message': '未授权'}), 401
+        return redirect(url_for('teacher_login'))
     
     try:
-        # 清除所有测试相关数据
-        TestResult.query.delete()
-        StudentTestHistory.query.delete()
-        Test.query.delete()
-        Question.query.delete()
+        # 删除测试相关的所有数据
+        # 1. 删除简答题提交记录
+        TestResult.query.filter_by(test_id=test_id).all()
+        for result in TestResult.query.filter_by(test_id=test_id).all():
+            ShortAnswerSubmission.query.filter_by(result_id=result.id).delete()
         
-        # 提交更改
+        # 2. 删除测试结果
+        TestResult.query.filter_by(test_id=test_id).delete()
+        
+        # 3. 删除测试配置
+        test = Test.query.get(test_id)
+        if test:
+            db.session.delete(test)
+        
         db.session.commit()
+        flash('测试及其所有成绩已删除', 'success')
         
-        return jsonify({
-            'success': True,
-            'message': '数据初始化成功'
-        })
     except Exception as e:
         db.session.rollback()
-        return jsonify({
-            'success': False,
-            'message': f'初始化失败：{str(e)}'
-        })
-
-@app.route('/clear_questions/<question_type>', methods=['POST'])
-def clear_questions(question_type):
-    if 'role' not in session or session['role'] != 'teacher':
-        return jsonify({'success': False, 'message': '未授权'}), 401
+        flash(f'删除失败: {str(e)}', 'error')
     
-    try:
-        Question.query.filter_by(question_type=question_type).delete()
-        db.session.commit()
-        return jsonify({'success': True})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'success': False, 'message': str(e)})
+    return redirect(url_for('test_statistics'))
+
 
 @app.route('/test_result/<int:result_id>')
 def test_result(result_id):
@@ -1138,7 +908,10 @@ def test_result(result_id):
     for question_id, answer in answers.items():
         question = Question.query.get(int(question_id))
         if question:
-            is_correct = False
+            is_correct = None  # 默认为None，简答题不判断对错
+            score = 0
+            comment = None
+            
             if question.question_type == 'single_choice':
                 is_correct = answer == question.correct_answer
                 score = test.single_choice_score if is_correct else 0
@@ -1157,8 +930,15 @@ def test_result(result_id):
                 is_correct = norm_fill(answer) == norm_fill(question.correct_answer)
                 score = test.fill_blank_score if is_correct else 0
             elif question.question_type == 'short_answer':
-                # 简答题需要教师手动评分
-                score = 0
+                # 简答题不判断对错，保持is_correct为None
+                # 从ShortAnswerSubmission表中获取评分和评语
+                submission = ShortAnswerSubmission.query.filter_by(
+                    result_id=result.id,
+                    question_id=question.id
+                ).first()
+                if submission:
+                    score = submission.score
+                    comment = submission.comment
             
             questions.append({
                 'id': question.id,
@@ -1172,6 +952,7 @@ def test_result(result_id):
                 'correct_answer': question.correct_answer,
                 'is_correct': is_correct,
                 'score': score,
+                'comment': comment,
                 'explanation': question.explanation
             })
     
@@ -1184,554 +965,978 @@ def test_result(result_id):
                          is_teacher=session.get('role') == 'teacher',
                          test_id=test.id if test else None)
 
-@app.route('/student_dashboard')
-def student_dashboard():
-    if 'student_id' not in session:
-        return redirect(url_for('student_start'))
+@app.route('/grade_short_answer_by_result', methods=['POST'])
+def grade_short_answer_by_result():
+    if 'role' not in session or session['role'] != 'teacher':
+        flash('未授权')
+        return redirect(url_for('teacher_login'))
     
-    # 获取学生信息
-    student = User.query.get(session['student_id'])
+    result_id = request.form.get('result_id')
+    question_id = request.form.get('question_id')
+    score = int(request.form.get('score'))
+    comment = request.form.get('comment')
+    test_id = request.form.get('test_id')
     
-    # 获取当前测试
-    current_test = Test.query.filter_by(is_active=True).first()
-    
-    # 获取学生历史记录
-    history = StudentTestHistory.query.filter_by(
-        student_id=session['student_id']
-    ).first()
-    
-    if not history:
-        history = StudentTestHistory(
-            student_id=session['student_id'],
-            student_name=session.get('student_name', ''),
-            class_number=session.get('class_number', ''),
-            test_count=0,
-            total_score=0,
-            average_score=0,
-            highest_score=0,
-            lowest_score=0
-        )
-        db.session.add(history)
+    try:
+        # 更新简答题评分
+        submission = ShortAnswerSubmission.query.filter_by(
+            result_id=result_id,
+            question_id=question_id
+        ).first()
+        
+        if not submission:
+            # 如果没有找到记录，创建一个新的
+            submission = ShortAnswerSubmission(
+                result_id=result_id,
+                question_id=question_id,
+                student_answer='',  # 这里不需要学生答案，因为已经在answers字段中
+                score=score,
+                comment=comment,
+                graded_bool=True
+            )
+            db.session.add(submission)
+        else:
+            submission.score = score
+            submission.comment = comment
+            submission.graded_bool = True
+        
+        # 重新计算测试结果的总分
+        result = TestResult.query.get(result_id)
+        test = Test.query.get(result.test_id)
+        answers = json.loads(result.answers)
+        
+        total_score = 0
+        for qid_str, answer in answers.items():
+            qid = int(qid_str)
+            question = Question.query.get(qid)
+            if not question:
+                continue
+            
+            if question.question_type == 'single_choice':
+                if answer == question.correct_answer:
+                    total_score += test.single_choice_score
+            elif question.question_type == 'multiple_choice':
+                def normalize(ans):
+                    return ''.join(sorted([c for c in ans.replace(',', '').replace(' ', '').upper() if c in 'ABCDE']))
+                if normalize(answer) == normalize(question.correct_answer):
+                    total_score += test.multiple_choice_score
+            elif question.question_type == 'true_false':
+                if answer == question.correct_answer:
+                    total_score += test.true_false_score
+            elif question.question_type == 'fill_blank':
+                def norm_fill(s):
+                    parts = [p.strip().lower() for p in s.replace('、', ',').split(',') if p.strip()]
+                    return ','.join(parts)
+                if norm_fill(answer) == norm_fill(question.correct_answer):
+                    total_score += test.fill_blank_score
+            elif question.question_type == 'short_answer':
+                # 从ShortAnswerSubmission表中获取评分
+                sa_submission = ShortAnswerSubmission.query.filter_by(
+                    result_id=result_id,
+                    question_id=qid
+                ).first()
+                if sa_submission and sa_submission.score is not None:
+                    total_score += sa_submission.score
+        
+        # 更新测试结果的总分
+        result.score = total_score
         db.session.commit()
+        
+        # 更新学生历史记录
+        student_id = result.student_id
+        all_results = TestResult.query.filter_by(student_id=student_id).all()
+        test_count = len(all_results)
+        total_score_sum = sum(r.score for r in all_results)
+        average_score = total_score_sum / test_count if test_count > 0 else 0
+        highest_score = max((r.score for r in all_results), default=0)
+        lowest_score = min((r.score for r in all_results), default=0)
+        
+        history = StudentTestHistory.query.filter_by(student_id=student_id).first()
+        if history:
+            history.test_count = test_count
+            history.total_score = total_score_sum
+            history.average_score = average_score
+            history.highest_score = highest_score
+            history.lowest_score = lowest_score
+            db.session.commit()
+        
+        flash('评分成功')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'评分失败：{str(e)}')
     
-    # 获取学生的测试结果
-    test_results = TestResult.query.filter_by(
-        student_id=session['student_id']
-    ).order_by(TestResult.created_at.desc()).all()
+    return redirect(url_for('test_result', result_id=result_id))
+
+@app.route('/import_questions/<question_type>', methods=['POST'])
+def import_questions(question_type):
+    """
+    导入题库文件（CSV 或 Excel 格式）
     
-    return render_template('student_dashboard.html',
-                         student=student,
-                         current_test=current_test,
-                         history=history,
-                         test_results=test_results)
+    Args:
+        question_type: 题目类型 (single_choice, multiple_choice, true_false, fill_blank, short_answer)
+    
+    Returns:
+        JSON 响应，包含导入结果
+    """
+    if 'role' not in session or session['role'] != 'teacher':
+        return jsonify({'success': False, 'message': '未授权'}), 403
+    
+    # 验证题目类型
+    valid_types = ['single_choice', 'multiple_choice', 'true_false', 'fill_blank', 'short_answer']
+    if question_type not in valid_types:
+        return jsonify({'success': False, 'message': f'无效的题目类型: {question_type}'}), 400
+    
+    # 检查文件是否存在
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'message': '未找到上传文件'}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'success': False, 'message': '未选择文件'}), 400
+    
+    # 获取题库名称
+    bank_name = request.form.get('bank_name', f'{question_type}_bank_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}')
+    
+    try:
+        # 根据文件扩展名判断文件类型
+        # 先从原始文件名获取扩展名，避免 secure_filename 处理后丢失
+        original_filename = file.filename
+        if '.' not in original_filename:
+            return jsonify({'success': False, 'message': '文件名缺少扩展名。请使用 .csv、.xlsx 或 .xls 文件'}), 400
+        
+        file_ext = original_filename.rsplit('.', 1)[1].lower()
+        
+        if file_ext not in ['csv', 'xlsx', 'xls']:
+            return jsonify({'success': False, 'message': f'不支持的文件格式: {file_ext}。仅支持 CSV 和 Excel 文件'}), 400
+        
+        # 使用 secure_filename 处理文件名（用于日志和显示）
+        filename = secure_filename(original_filename)
+        
+        # 读取文件内容
+        if file_ext == 'csv':
+            try:
+                df = pd.read_csv(file, encoding='utf-8')
+            except UnicodeDecodeError:
+                try:
+                    df = pd.read_csv(file, encoding='gbk')
+                except Exception as e:
+                    return jsonify({'success': False, 'message': f'CSV 文件编码错误，请使用 UTF-8 或 GBK 编码: {str(e)}'}), 400
+        else:  # xlsx or xls
+            try:
+                df = pd.read_excel(file)
+            except Exception as e:
+                return jsonify({'success': False, 'message': f'Excel 文件读取失败: {str(e)}'}), 400
+        
+        # 根据题型定义不同的列名要求
+        if question_type == 'single_choice':
+            # 单选题：题干、选项A/B/C/D、正确答案、分值、答案解析
+            required_columns = ['题干', '选项A', '选项B', '选项C', '选项D', '正确答案', '分值']
+            content_col = '题干'
+            answer_col = '正确答案'
+            score_col = '分值'
+            explanation_col = '答案解析'
+        elif question_type == 'multiple_choice':
+            # 多选题：题干、选项A/B/C/D/E、正确答案、分值、解析
+            required_columns = ['题干', '选项A', '选项B', '选项C', '选项D', '正确答案', '分值']
+            content_col = '题干'
+            answer_col = '正确答案'
+            score_col = '分值'
+            explanation_col = '解析'
+        elif question_type == 'true_false':
+            # 判断题：题干、正确答案、分值、解析
+            required_columns = ['题干', '正确答案', '分值']
+            content_col = '题干'
+            answer_col = '正确答案'
+            score_col = '分值'
+            explanation_col = '解析'
+        elif question_type == 'fill_blank':
+            # 填空题：题干、正确答案、分值、解析
+            required_columns = ['题干', '正确答案', '分值']
+            content_col = '题干'
+            answer_col = '正确答案'
+            score_col = '分值'
+            explanation_col = '解析'
+        elif question_type == 'short_answer':
+            # 简答题：题目内容、参考答案、分值、解析
+            required_columns = ['题目内容', '参考答案', '分值']
+            content_col = '题目内容'
+            answer_col = '参考答案'
+            score_col = '分值'
+            explanation_col = '解析'
+        else:
+            return jsonify({'success': False, 'message': f'不支持的题型: {question_type}'}), 400
+        
+        # 验证必需的列
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            available_cols = ', '.join(df.columns.tolist())
+            return jsonify({
+                'success': False,
+                'message': f'缺少必需的列: {", ".join(missing_columns)}。文件中的列: {available_cols}'
+            }), 400
+        
+        # 创建或获取题库
+        question_bank = QuestionBank.query.filter_by(name=bank_name, question_type=question_type).first()
+        if not question_bank:
+            question_bank = QuestionBank(name=bank_name, question_type=question_type)
+            db.session.add(question_bank)
+            db.session.flush()  # 获取 ID
+        
+        # 导入题目
+        imported_count = 0
+        errors = []
+        
+        for index, row in df.iterrows():
+            try:
+                # 验证必填字段
+                if pd.isna(row[content_col]) or pd.isna(row[answer_col]) or pd.isna(row[score_col]):
+                    errors.append(f'第 {index + 2} 行：题目、正确答案或分值为空')
+                    continue
+                
+                # 创建题目对象
+                question = Question(
+                    question_type=question_type,
+                    content=str(row[content_col]).strip(),
+                    correct_answer=str(row[answer_col]).strip(),
+                    score=int(row[score_col]),
+                    bank_id=question_bank.id
+                )
+                
+                # 设置选项（如果有）
+                if question_type in ['single_choice', 'multiple_choice']:
+                    question.option_a = str(row.get('选项A', '')).strip() if not pd.isna(row.get('选项A')) else ''
+                    question.option_b = str(row.get('选项B', '')).strip() if not pd.isna(row.get('选项B')) else ''
+                    question.option_c = str(row.get('选项C', '')).strip() if not pd.isna(row.get('选项C')) else ''
+                    question.option_d = str(row.get('选项D', '')).strip() if not pd.isna(row.get('选项D')) else ''
+                    if question_type == 'multiple_choice':
+                        question.option_e = str(row.get('选项E', '')).strip() if not pd.isna(row.get('选项E')) else ''
+                
+                # 设置解析（可选）
+                if explanation_col and explanation_col in df.columns and not pd.isna(row[explanation_col]):
+                    question.explanation = str(row[explanation_col]).strip()
+                
+                # 设置图片路径（可选）
+                if '图片' in df.columns and not pd.isna(row['图片']):
+                    question.image_path = str(row['图片']).strip()
+                
+                db.session.add(question)
+                imported_count += 1
+                
+            except Exception as e:
+                errors.append(f'第 {index + 2} 行导入失败: {str(e)}')
+                continue
+        
+        # 提交事务
+        db.session.commit()
+        
+        # 构建响应消息
+        message = f'成功导入 {imported_count} 道题目到题库 "{bank_name}"'
+        if errors:
+            message += f'\n\n遇到 {len(errors)} 个错误：\n' + '\n'.join(errors[:10])
+            if len(errors) > 10:
+                message += f'\n... 还有 {len(errors) - 10} 个错误'
+        
+        return jsonify({
+            'success': True,
+            'message': message,
+            'imported_count': imported_count,
+            'error_count': len(errors),
+            'bank_id': question_bank.id,
+            'bank_name': bank_name
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"导入失败: {error_detail}")
+        return jsonify({'success': False, 'message': f'导入失败: {str(e)}'}), 500
+
+
+@app.route('/api/question_banks')
+def get_question_banks():
+    """获取所有题库列表"""
+    if 'role' not in session or session['role'] != 'teacher':
+        return jsonify({'success': False, 'message': '未授权'}), 403
+    
+    banks = QuestionBank.query.order_by(QuestionBank.created_at.desc()).all()
+    return jsonify({
+        'success': True,
+        'banks': [{
+            'id': bank.id,
+            'name': bank.name,
+            'question_type': bank.question_type,
+            'question_count': len(bank.questions),
+            'created_at': to_bj(bank.created_at).strftime('%Y-%m-%d %H:%M:%S')
+        } for bank in banks]
+    })
+
+
+@app.route('/api/question_count/<question_type>')
+def get_question_count(question_type):
+    """获取指定类型的题目总数"""
+    if 'role' not in session or session['role'] != 'teacher':
+        return jsonify({'success': False, 'message': '未授权'}), 403
+    
+    count = Question.query.filter_by(question_type=question_type).count()
+    return jsonify({'success': True, 'count': count})
+
+
+@app.route('/api/bank/<int:bank_id>/rename', methods=['POST'])
+def rename_bank(bank_id):
+    """重命名题库"""
+    if 'role' not in session or session['role'] != 'teacher':
+        return jsonify({'success': False, 'message': '未授权'}), 403
+    
+    try:
+        data = request.get_json()
+        new_name = data.get('name', '').strip()
+        
+        if not new_name:
+            return jsonify({'success': False, 'message': '题库名称不能为空'}), 400
+        
+        bank = QuestionBank.query.get(bank_id)
+        if not bank:
+            return jsonify({'success': False, 'message': '题库不存在'}), 404
+        
+        # 检查同类型题库是否已存在相同名称
+        existing = QuestionBank.query.filter_by(
+            name=new_name,
+            question_type=bank.question_type
+        ).filter(QuestionBank.id != bank_id).first()
+        
+        if existing:
+            return jsonify({'success': False, 'message': f'该题型下已存在名为"{new_name}"的题库'}), 400
+        
+        bank.name = new_name
+        db.session.commit()
+        
+        return jsonify({'success': True, 'message': '重命名成功'})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f'重命名失败: {str(e)}'}), 500
+
+
+@app.route('/api/bank/<int:bank_id>', methods=['DELETE'])
+def delete_bank(bank_id):
+    """删除题库"""
+    if 'role' not in session or session['role'] != 'teacher':
+        return jsonify({'success': False, 'message': '未授权'}), 403
+    
+    try:
+        bank = QuestionBank.query.get(bank_id)
+        if not bank:
+            return jsonify({'success': False, 'message': '题库不存在'}), 404
+        
+        # 删除题库（级联删除所有题目）
+        db.session.delete(bank)
+        db.session.commit()
+        
+        return jsonify({'success': True, 'message': '删除成功'})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f'删除失败: {str(e)}'}), 500
+
+
+@app.route('/api/upload_image', methods=['POST'])
+def upload_image():
+    """上传图片"""
+    if 'role' not in session or session['role'] != 'teacher':
+        return jsonify({'success': False, 'message': '未授权'}), 403
+    
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'message': '未找到文件'}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'success': False, 'message': '未选择文件'}), 400
+    
+    try:
+        # 检查文件类型
+        if '.' not in file.filename:
+            return jsonify({'success': False, 'message': '文件名无效'}), 400
+        
+        file_ext = file.filename.rsplit('.', 1)[1].lower()
+        if file_ext not in ALLOWED_IMG_EXT:
+            return jsonify({'success': False, 'message': f'不支持的图片格式: {file_ext}'}), 400
+        
+        # 检查文件大小
+        file.seek(0, os.SEEK_END)
+        file_size = file.tell()
+        file.seek(0)
+        
+        if file_size > MAX_IMG_SIZE:
+            return jsonify({'success': False, 'message': f'图片大小超过限制（最大 {MAX_IMG_SIZE // 1024 // 1024}MB）'}), 400
+        
+        # 生成唯一文件名
+        filename = f"{uuid.uuid4().hex}.{file_ext}"
+        
+        # 确保上传目录存在
+        upload_dir = os.path.join('static', 'uploads')
+        os.makedirs(upload_dir, exist_ok=True)
+        
+        # 保存文件
+        filepath = os.path.join(upload_dir, filename)
+        file.save(filepath)
+        
+        # 返回URL
+        url = f"/static/uploads/{filename}"
+        return jsonify({'success': True, 'url': url})
+        
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'上传失败: {str(e)}'}), 500
+
+
+@app.route('/api/question/<question_id>', methods=['GET', 'POST', 'DELETE'])
+def manage_question(question_id):
+    """获取、更新或删除单个题目"""
+    if 'role' not in session or session['role'] != 'teacher':
+        return jsonify({'success': False, 'message': '未授权'}), 403
+    
+    if request.method == 'GET':
+        # 获取题目详情
+        if question_id == 'new':
+            return jsonify({'success': False, 'message': '无效的题目ID'}), 400
+        
+        question = Question.query.get(question_id)
+        if not question:
+            return jsonify({'success': False, 'message': '题目不存在'}), 404
+        
+        return jsonify({
+            'success': True,
+            'id': question.id,
+            'content': question.content,
+            'option_a': question.option_a,
+            'option_b': question.option_b,
+            'option_c': question.option_c,
+            'option_d': question.option_d,
+            'option_e': question.option_e,
+            'correct_answer': question.correct_answer,
+            'score': question.score,
+            'explanation': question.explanation,
+            'image_path': question.image_path,
+            'question_type': question.question_type,
+            'bank_id': question.bank_id
+        })
+    
+    elif request.method == 'POST':
+        # 创建或更新题目
+        try:
+            # 获取表单数据
+            content = request.form.get('content', '').strip()
+            if not content:
+                return jsonify({'success': False, 'message': '题目内容不能为空'}), 400
+            
+            if question_id == 'new':
+                # 创建新题目
+                bank_id = request.form.get('bank_id')
+                question_type = request.form.get('question_type')
+                
+                if not bank_id or not question_type:
+                    return jsonify({'success': False, 'message': '缺少必要参数'}), 400
+                
+                question = Question(
+                    question_type=question_type,
+                    bank_id=int(bank_id)
+                )
+            else:
+                # 更新现有题目
+                question = Question.query.get(question_id)
+                if not question:
+                    return jsonify({'success': False, 'message': '题目不存在'}), 404
+            
+            # 更新字段
+            question.content = content
+            question.correct_answer = request.form.get('correct_answer', '').strip()
+            question.score = int(request.form.get('score', 0))
+            question.explanation = request.form.get('explanation', '').strip() or None
+            
+            # 更新选项（如果是选择题）
+            if question.question_type in ['single_choice', 'multiple_choice']:
+                question.option_a = request.form.get('option_a', '').strip() or None
+                question.option_b = request.form.get('option_b', '').strip() or None
+                question.option_c = request.form.get('option_c', '').strip() or None
+                question.option_d = request.form.get('option_d', '').strip() or None
+                if question.question_type == 'multiple_choice':
+                    question.option_e = request.form.get('option_e', '').strip() or None
+            
+            if question_id == 'new':
+                db.session.add(question)
+            
+            db.session.commit()
+            
+            return jsonify({'success': True, 'message': '保存成功', 'id': question.id})
+            
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({'success': False, 'message': f'保存失败: {str(e)}'}), 500
+    
+    elif request.method == 'DELETE':
+        # 删除题目
+        try:
+            if question_id == 'new':
+                return jsonify({'success': False, 'message': '无效的题目ID'}), 400
+            
+            question = Question.query.get(question_id)
+            if not question:
+                return jsonify({'success': False, 'message': '题目不存在'}), 404
+            
+            db.session.delete(question)
+            db.session.commit()
+            
+            return jsonify({'success': True, 'message': '删除成功'})
+            
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({'success': False, 'message': f'删除失败: {str(e)}'}), 500
+
+
+@app.route('/api/question_bank/<int:bank_id>/questions', methods=['GET', 'POST'])
+def manage_bank_questions(bank_id):
+    """获取或更新题库中的题目"""
+    if 'role' not in session or session['role'] != 'teacher':
+        return jsonify({'success': False, 'message': '未授权'}), 403
+    
+    bank = QuestionBank.query.get(bank_id)
+    if not bank:
+        return jsonify({'success': False, 'message': '题库不存在'}), 404
+    
+    if request.method == 'GET':
+        # 获取题库内容
+        questions = Question.query.filter_by(bank_id=bank_id).order_by(Question.id).all()
+        return jsonify({
+            'success': True,
+            'bank_id': bank.id,
+            'bank_name': bank.name,
+            'question_type': bank.question_type,
+            'questions': [{
+                'id': q.id,
+                'content': q.content,
+                'option_a': q.option_a,
+                'option_b': q.option_b,
+                'option_c': q.option_c,
+                'option_d': q.option_d,
+                'option_e': q.option_e,
+                'correct_answer': q.correct_answer,
+                'score': q.score,
+                'explanation': q.explanation,
+                'image_path': q.image_path
+            } for q in questions]
+        })
+    
+    else:  # POST - 更新题库内容
+        try:
+            data = request.get_json()
+            questions_data = data.get('questions', [])
+            
+            # 删除现有题目
+            Question.query.filter_by(bank_id=bank_id).delete()
+            
+            # 添加新题目
+            for q_data in questions_data:
+                # 跳过空题目
+                if not q_data.get('content', '').strip():
+                    continue
+                
+                question = Question(
+                    question_type=bank.question_type,
+                    content=q_data.get('content', '').strip(),
+                    option_a=q_data.get('option_a', '').strip() if q_data.get('option_a') else None,
+                    option_b=q_data.get('option_b', '').strip() if q_data.get('option_b') else None,
+                    option_c=q_data.get('option_c', '').strip() if q_data.get('option_c') else None,
+                    option_d=q_data.get('option_d', '').strip() if q_data.get('option_d') else None,
+                    option_e=q_data.get('option_e', '').strip() if q_data.get('option_e') else None,
+                    correct_answer=q_data.get('correct_answer', '').strip(),
+                    score=int(q_data.get('score', 0)) if q_data.get('score') else 0,
+                    explanation=q_data.get('explanation', '').strip() if q_data.get('explanation') else None,
+                    bank_id=bank_id
+                )
+                db.session.add(question)
+            
+            db.session.commit()
+            
+            return jsonify({'success': True, 'message': '保存成功'})
+            
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({'success': False, 'message': f'保存失败: {str(e)}'}), 500
+
+
+@app.route('/save_test_settings', methods=['POST'])
+def save_test_settings():
+    """
+    保存测试配置
+    
+    功能：
+    1. 验证所有必填字段
+    2. 验证题库中有足够的题目
+    3. 自动计算总分
+    4. 保存配置或预设
+    
+    Returns:
+        JSON 响应，包含保存结果
+    """
+    if 'role' not in session or session['role'] != 'teacher':
+        return jsonify({'success': False, 'message': '未授权'}), 403
+    
+    try:
+        # 获取表单数据
+        title = request.form.get('test_title', '').strip()
+        
+        # 获取各题型的配置
+        single_choice_count = int(request.form.get('single_choice_count', 0))
+        multiple_choice_count = int(request.form.get('multiple_choice_count', 0))
+        true_false_count = int(request.form.get('true_false_count', 0))
+        fill_blank_count = int(request.form.get('fill_blank_count', 0))
+        short_answer_count = int(request.form.get('short_answer_count', 0))
+        
+        single_choice_score = int(request.form.get('single_choice_score', 0))
+        multiple_choice_score = int(request.form.get('multiple_choice_score', 0))
+        true_false_score = int(request.form.get('true_false_score', 0))
+        fill_blank_score = int(request.form.get('fill_blank_score', 0))
+        short_answer_score = int(request.form.get('short_answer_score', 0))
+        
+        single_choice_bank_id = request.form.get('single_choice_bank')
+        multiple_choice_bank_id = request.form.get('multiple_choice_bank')
+        true_false_bank_id = request.form.get('true_false_bank')
+        fill_blank_bank_id = request.form.get('fill_blank_bank')
+        short_answer_bank_id = request.form.get('short_answer_bank')
+        
+        allow_student_choice = request.form.get('allow_student_choice') == 'true'
+        # 总是保存为预设，使用测试标题作为预设名
+        save_as_preset = True
+        preset_name = title
+        
+        # 验证必填字段
+        if not title:
+            return jsonify({'success': False, 'message': '测试标题不能为空'}), 400
+        
+        # 验证至少有一种题型
+        total_questions = (single_choice_count + multiple_choice_count + 
+                          true_false_count + fill_blank_count + short_answer_count)
+        if total_questions == 0:
+            return jsonify({'success': False, 'message': '至少需要设置一种题型的题目数量'}), 400
+        
+        # 验证题库中有足够的题目
+        validation_errors = []
+        
+        if single_choice_count > 0:
+            if not single_choice_bank_id:
+                validation_errors.append('单选题：未选择题库')
+            else:
+                available = Question.query.filter_by(
+                    question_type='single_choice',
+                    bank_id=int(single_choice_bank_id)
+                ).count()
+                if available < single_choice_count:
+                    validation_errors.append(f'单选题：题库中只有 {available} 道题，需要 {single_choice_count} 道')
+        
+        if multiple_choice_count > 0:
+            if not multiple_choice_bank_id:
+                validation_errors.append('多选题：未选择题库')
+            else:
+                available = Question.query.filter_by(
+                    question_type='multiple_choice',
+                    bank_id=int(multiple_choice_bank_id)
+                ).count()
+                if available < multiple_choice_count:
+                    validation_errors.append(f'多选题：题库中只有 {available} 道题，需要 {multiple_choice_count} 道')
+        
+        if true_false_count > 0:
+            if not true_false_bank_id:
+                validation_errors.append('判断题：未选择题库')
+            else:
+                available = Question.query.filter_by(
+                    question_type='true_false',
+                    bank_id=int(true_false_bank_id)
+                ).count()
+                if available < true_false_count:
+                    validation_errors.append(f'判断题：题库中只有 {available} 道题，需要 {true_false_count} 道')
+        
+        if fill_blank_count > 0:
+            if not fill_blank_bank_id:
+                validation_errors.append('填空题：未选择题库')
+            else:
+                available = Question.query.filter_by(
+                    question_type='fill_blank',
+                    bank_id=int(fill_blank_bank_id)
+                ).count()
+                if available < fill_blank_count:
+                    validation_errors.append(f'填空题：题库中只有 {available} 道题，需要 {fill_blank_count} 道')
+        
+        if short_answer_count > 0:
+            if not short_answer_bank_id:
+                validation_errors.append('简答题：未选择题库')
+            else:
+                available = Question.query.filter_by(
+                    question_type='short_answer',
+                    bank_id=int(short_answer_bank_id)
+                ).count()
+                if available < short_answer_count:
+                    validation_errors.append(f'简答题：题库中只有 {available} 道题，需要 {short_answer_count} 道')
+        
+        if validation_errors:
+            return jsonify({
+                'success': False,
+                'message': '验证失败',
+                'errors': validation_errors
+            }), 400
+        
+        # 检查分数设置警告
+        warnings = []
+        if single_choice_count > 0 and single_choice_score == 0:
+            warnings.append('单选题：题目数量大于0，但每题分数为0')
+        if multiple_choice_count > 0 and multiple_choice_score == 0:
+            warnings.append('多选题：题目数量大于0，但每题分数为0')
+        if true_false_count > 0 and true_false_score == 0:
+            warnings.append('判断题：题目数量大于0，但每题分数为0')
+        if fill_blank_count > 0 and fill_blank_score == 0:
+            warnings.append('填空题：题目数量大于0，但每题分数为0')
+        if short_answer_count > 0 and short_answer_score == 0:
+            warnings.append('简答题：题目数量大于0，但每题分数为0')
+        
+        # 自动计算总分
+        total_score = (
+            single_choice_count * single_choice_score +
+            multiple_choice_count * multiple_choice_score +
+            true_false_count * true_false_score +
+            fill_blank_count * fill_blank_score +
+            short_answer_count * short_answer_score
+        )
+        
+        # 总是保存为预设（使用测试标题作为预设名）
+        # 查找是否存在相同标题的预设
+        preset = TestPreset.query.filter_by(title=preset_name).first()
+        
+        if preset:
+            # 更新现有预设
+            preset.single_choice_count = single_choice_count
+            preset.multiple_choice_count = multiple_choice_count
+            preset.true_false_count = true_false_count
+            preset.fill_blank_count = fill_blank_count
+            preset.short_answer_count = short_answer_count
+            preset.single_choice_score = single_choice_score
+            preset.multiple_choice_score = multiple_choice_score
+            preset.true_false_score = true_false_score
+            preset.fill_blank_score = fill_blank_score
+            preset.short_answer_score = short_answer_score
+            preset.single_choice_bank_id = int(single_choice_bank_id) if single_choice_bank_id else None
+            preset.multiple_choice_bank_id = int(multiple_choice_bank_id) if multiple_choice_bank_id else None
+            preset.true_false_bank_id = int(true_false_bank_id) if true_false_bank_id else None
+            preset.fill_blank_bank_id = int(fill_blank_bank_id) if fill_blank_bank_id else None
+            preset.short_answer_bank_id = int(short_answer_bank_id) if short_answer_bank_id else None
+            preset.allow_student_choice = allow_student_choice
+            message = f'预设 "{preset_name}" 更新成功'
+        else:
+            # 创建新预设
+            preset = TestPreset(
+                title=preset_name,
+                single_choice_count=single_choice_count,
+                multiple_choice_count=multiple_choice_count,
+                true_false_count=true_false_count,
+                fill_blank_count=fill_blank_count,
+                short_answer_count=short_answer_count,
+                single_choice_score=single_choice_score,
+                multiple_choice_score=multiple_choice_score,
+                true_false_score=true_false_score,
+                fill_blank_score=fill_blank_score,
+                short_answer_score=short_answer_score,
+                single_choice_bank_id=int(single_choice_bank_id) if single_choice_bank_id else None,
+                multiple_choice_bank_id=int(multiple_choice_bank_id) if multiple_choice_bank_id else None,
+                true_false_bank_id=int(true_false_bank_id) if true_false_bank_id else None,
+                fill_blank_bank_id=int(fill_blank_bank_id) if fill_blank_bank_id else None,
+                short_answer_bank_id=int(short_answer_bank_id) if short_answer_bank_id else None,
+                allow_student_choice=allow_student_choice
+            )
+            db.session.add(preset)
+            message = f'预设 "{preset_name}" 保存成功'
+        
+        # 同时创建/更新活跃的测试配置（用于存储 allow_student_choice 标志）
+        # 将之前的测试设为非活跃
+        Test.query.update({'is_active': False})
+        
+        # 创建新的测试配置
+        test = Test(
+            title=title,
+            single_choice_count=single_choice_count,
+            multiple_choice_count=multiple_choice_count,
+            true_false_count=true_false_count,
+            fill_blank_count=fill_blank_count,
+            short_answer_count=short_answer_count,
+            single_choice_score=single_choice_score,
+            multiple_choice_score=multiple_choice_score,
+            true_false_score=true_false_score,
+            fill_blank_score=fill_blank_score,
+            short_answer_score=short_answer_score,
+            total_score=total_score,
+            single_choice_bank_id=int(single_choice_bank_id) if single_choice_bank_id else None,
+            multiple_choice_bank_id=int(multiple_choice_bank_id) if multiple_choice_bank_id else None,
+            true_false_bank_id=int(true_false_bank_id) if true_false_bank_id else None,
+            fill_blank_bank_id=int(fill_blank_bank_id) if fill_blank_bank_id else None,
+            short_answer_bank_id=int(short_answer_bank_id) if short_answer_bank_id else None,
+            allow_student_choice=allow_student_choice,
+            is_active=True
+        )
+        db.session.add(test)
+        db.session.commit()
+        
+        response_data = {
+            'success': True,
+            'message': message,
+            'preset_id': preset.id,
+            'total_score': total_score
+        }
+        
+        # 如果有警告，添加到响应中
+        if warnings:
+            response_data['warnings'] = warnings
+        
+        return jsonify(response_data)
+    
+    except ValueError as e:
+        return jsonify({'success': False, 'message': f'数据格式错误: {str(e)}'}), 400
+    except Exception as e:
+        db.session.rollback()
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': f'保存失败: {str(e)}'}), 500
+
+
+@app.route('/api/test_presets')
+def get_test_presets():
+    """获取所有测试预设"""
+    if 'role' not in session or session['role'] != 'teacher':
+        return jsonify({'success': False, 'message': '未授权'}), 403
+    
+    presets = TestPreset.query.order_by(TestPreset.created_at.desc()).all()
+    return jsonify({
+        'success': True,
+        'presets': [{
+            'id': preset.id,
+            'title': preset.title,
+            'total_score': (
+                (preset.single_choice_count or 0) * (preset.single_choice_score or 0) +
+                (preset.multiple_choice_count or 0) * (preset.multiple_choice_score or 0) +
+                (preset.true_false_count or 0) * (preset.true_false_score or 0) +
+                (preset.fill_blank_count or 0) * (preset.fill_blank_score or 0) +
+                (preset.short_answer_count or 0) * (preset.short_answer_score or 0)
+            ),
+            'created_at': to_bj(preset.created_at).strftime('%Y-%m-%d %H:%M:%S')
+        } for preset in presets]
+    })
+
+
+@app.route('/api/test_presets/<int:preset_id>')
+def get_test_preset(preset_id):
+    """获取指定预设的详细信息"""
+    if 'role' not in session or session['role'] != 'teacher':
+        return jsonify({'success': False, 'message': '未授权'}), 403
+    
+    preset = TestPreset.query.get_or_404(preset_id)
+    return jsonify({
+        'success': True,
+        'preset': {
+            'id': preset.id,
+            'title': preset.title,
+            'single_choice_count': preset.single_choice_count,
+            'multiple_choice_count': preset.multiple_choice_count,
+            'true_false_count': preset.true_false_count,
+            'fill_blank_count': preset.fill_blank_count,
+            'short_answer_count': preset.short_answer_count,
+            'single_choice_score': preset.single_choice_score,
+            'multiple_choice_score': preset.multiple_choice_score,
+            'true_false_score': preset.true_false_score,
+            'fill_blank_score': preset.fill_blank_score,
+            'short_answer_score': preset.short_answer_score,
+            'single_choice_bank_id': preset.single_choice_bank_id,
+            'multiple_choice_bank_id': preset.multiple_choice_bank_id,
+            'true_false_bank_id': preset.true_false_bank_id,
+            'fill_blank_bank_id': preset.fill_blank_bank_id,
+            'short_answer_bank_id': preset.short_answer_bank_id,
+            'allow_student_choice': preset.allow_student_choice
+        }
+    })
+
+
+@app.route('/api/test_presets/<int:preset_id>', methods=['DELETE'])
+def delete_test_preset(preset_id):
+    """删除指定预设"""
+    if 'role' not in session or session['role'] != 'teacher':
+        return jsonify({'success': False, 'message': '未授权'}), 403
+    
+    preset = TestPreset.query.get_or_404(preset_id)
+    db.session.delete(preset)
+    db.session.commit()
+    
+    return jsonify({'success': True, 'message': '预设删除成功'})
+
+
+@app.route('/api/current_test_settings')
+def get_current_test_settings():
+    """获取当前测试设置（公开API，学生可访问）"""
+    # 获取当前激活的测试
+    current_test = Test.query.filter_by(is_active=True).first()
+    if not current_test:
+        return jsonify({'allow_student_choice': False})
+    
+    # 返回当前测试的allow_student_choice设置
+    return jsonify({'allow_student_choice': current_test.allow_student_choice})
+
+
+@app.route('/api/test_presets_public')
+def get_test_presets_public():
+    """获取可供学生选择的测试预设列表（公开API）"""
+    # 检查当前测试是否允许学生自选
+    current_test = Test.query.filter_by(is_active=True).first()
+    if not current_test or not current_test.allow_student_choice:
+        return jsonify({'presets': []})
+    
+    # 如果允许，返回所有预设
+    presets = TestPreset.query.order_by(TestPreset.created_at.desc()).all()
+    return jsonify({
+        'presets': [{
+            'id': preset.id,
+            'title': preset.title
+        } for preset in presets]
+    })
+
+
+@app.route('/change_password', methods=['POST'])
+def change_password():
+    """修改密码"""
+    if 'role' not in session or session['role'] != 'teacher':
+        return jsonify({'success': False, 'message': '未授权'}), 403
+    
+    current_password = request.form.get('current_password')
+    new_password = request.form.get('new_password')
+    confirm_password = request.form.get('confirm_password')
+    
+    if not all([current_password, new_password, confirm_password]):
+        flash('所有字段都必须填写')
+        return redirect(url_for('teacher_dashboard'))
+    
+    if new_password != confirm_password:
+        flash('两次输入的新密码不一致')
+        return redirect(url_for('teacher_dashboard'))
+    
+    user = User.query.get(session['user_id'])
+    if not user.check_password(current_password):
+        flash('当前密码错误')
+        return redirect(url_for('teacher_dashboard'))
+    
+    user.set_password(new_password)
+    db.session.commit()
+    flash('密码修改成功')
+    return redirect(url_for('teacher_dashboard'))
+
 
 @app.route('/logout')
 def logout():
     session.clear()
     return redirect(url_for('student_start'))
 
-@app.route('/export_questions/<question_type>')
-def export_questions(question_type):
-    if 'role' not in session or session['role'] != 'teacher':
-        flash('未授权')
-        return redirect(url_for('teacher_dashboard'))
-    questions = Question.query.filter_by(question_type=question_type).all()
-    if not questions:
-        flash('题库为空')
-        return redirect(url_for('teacher_dashboard'))
-    data = []
-    if question_type == 'single_choice':
-        columns = ['题干', '选项A', '选项B', '选项C', '选项D', '正确答案', '分值', '解析']
-        for q in questions:
-            data.append([
-                q.content, q.option_a, q.option_b, q.option_c, q.option_d, q.correct_answer, q.score, q.explanation
-            ])
-    elif question_type == 'multiple_choice':
-        columns = ['题干', '选项A', '选项B', '选项C', '选项D', '选项E', '正确答案', '分值', '解析']
-        for q in questions:
-            data.append([
-                q.content, q.option_a, q.option_b, q.option_c, q.option_d, q.option_e, q.correct_answer, q.score, q.explanation
-            ])
-    elif question_type == 'true_false':
-        columns = ['题干', '正确答案', '分值', '解析']
-        for q in questions:
-            data.append([
-                q.content, q.correct_answer, q.score, q.explanation
-            ])
-    elif question_type == 'short_answer':
-        columns = ['题干', '参考答案', '分值', '解析']
-        for q in questions:
-            data.append([
-                q.content, q.correct_answer, q.score, q.explanation
-            ])
-    else:  # fill_blank
-        columns = ['题干', '正确答案', '分值', '解析']
-        for q in questions:
-            data.append([
-                q.content, q.correct_answer, q.score, q.explanation
-            ])
-    df = pd.DataFrame(data, columns=columns)
-    output = BytesIO()
-    df.to_excel(output, index=False)
-    output.seek(0)
-    filename = f"{question_type}_questions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    return send_file(output, as_attachment=True, download_name=filename, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-
-# 题库管理API
-@app.route('/api/question_banks')
-def get_question_banks_api():
-    if 'role' not in session or session['role'] != 'teacher':
-        return jsonify({'error': 'Unauthorized'}), 401
-    
-    banks = QuestionBank.query.all()
-    result = {
-        'single_choice': [],
-        'multiple_choice': [],
-        'true_false': [],
-        'fill_blank': [],
-        'short_answer': []
-    }
-    
-    for bank in banks:
-        bank_data = {
-            'id': bank.id,
-            'name': bank.name,
-            'question_count': Question.query.filter_by(bank_id=bank.id).count()
-        }
-        result[bank.question_type].append(bank_data)
-    
-    return jsonify(result)
-
-@app.route('/api/question_bank', methods=['POST'])
-def create_question_bank():
-    if 'role' not in session or session['role'] != 'teacher':
-        return jsonify({'error': '未登录'}), 401
-    data = request.json
-    name = data.get('name')
-    question_type = data.get('question_type')
-    if not name or not question_type:
-        return jsonify({'error': '参数缺失'}), 400
-    bank = QuestionBank(name=name, question_type=question_type)
-    db.session.add(bank)
-    db.session.commit()
-    return jsonify({'success': True, 'id': bank.id})
-
-@app.route('/api/question_bank/<int:bank_id>', methods=['PUT'])
-def rename_question_bank(bank_id):
-    if 'role' not in session or session['role'] != 'teacher':
-        return jsonify({'error': '未登录'}), 401
-    data = request.json
-    name = data.get('name')
-    bank = QuestionBank.query.get(bank_id)
-    if not bank:
-        return jsonify({'error': '题库不存在'}), 404
-    bank.name = name
-    db.session.commit()
-    return jsonify({'success': True})
-
-@app.route('/api/question_bank/<int:bank_id>', methods=['DELETE'])
-def delete_question_bank(bank_id):
-    if 'role' not in session or session['role'] != 'teacher':
-        return jsonify({'error': '未登录'}), 401
-    bank = QuestionBank.query.get(bank_id)
-    if not bank:
-        return jsonify({'error': '题库不存在'}), 404
-    db.session.delete(bank)
-    db.session.commit()
-    return jsonify({'success': True})
-
-@app.route('/api/question_bank/<int:bank_id>/questions', methods=['GET'])
-def get_bank_questions(bank_id):
-    if 'role' not in session or session['role'] != 'teacher':
-        return jsonify({'error': '未登录'}), 401
-    bank = QuestionBank.query.get(bank_id)
-    if not bank:
-        return jsonify({'error': '题库不存在'}), 404
-    questions = []
-    for q in bank.questions:
-        questions.append({
-            'id': q.id,
-            'content': q.content,
-            'option_a': q.option_a,
-            'option_b': q.option_b,
-            'option_c': q.option_c,
-            'option_d': q.option_d,
-            'option_e': q.option_e,
-            'correct_answer': q.correct_answer,
-            'score': q.score,
-            'explanation': q.explanation
-        })
-    return jsonify({'questions': questions, 'bank_name': bank.name, 'question_type': bank.question_type})
-
-@app.route('/api/question_bank/<int:bank_id>/questions', methods=['POST'])
-def save_bank_questions(bank_id):
-    if 'role' not in session or session['role'] != 'teacher':
-        return jsonify({'error': '未登录'}), 401
-    bank = QuestionBank.query.get(bank_id)
-    if not bank:
-        return jsonify({'error': '题库不存在'}), 404
-    data = request.json
-    questions = data.get('questions', [])
-    # 先清空原有题目
-    for q in bank.questions:
-        db.session.delete(q)
-    db.session.commit()
-    # 新增题目
-    for q in questions:
-        question = Question(
-            question_type=bank.question_type,
-            content=q.get('content'),
-            option_a=q.get('option_a'),
-            option_b=q.get('option_b'),
-            option_c=q.get('option_c'),
-            option_d=q.get('option_d'),
-            option_e=q.get('option_e'),
-            correct_answer=q.get('correct_answer'),
-            score=q.get('score'),
-            explanation=q.get('explanation'),
-            bank_id=bank.id
-        )
-        db.session.add(question)
-    db.session.commit()
-    return jsonify({'success': True})
-
-@app.route('/teacher/bank/<int:bank_id>')
-def teacher_bank(bank_id):
-    if 'role' not in session or session['role'] != 'teacher':
-        return redirect(url_for('teacher_login'))
-    
-    bank = QuestionBank.query.get_or_404(bank_id)
-    questions = Question.query.filter_by(bank_id=bank_id).all()
-    
-    return render_template('bank_content.html', bank=bank, questions=questions)
-
-@app.route('/api/bank/<int:bank_id>/rename', methods=['POST'])
-def rename_bank(bank_id):
-    if 'role' not in session or session['role'] != 'teacher':
-        return jsonify({'error': 'Unauthorized'}), 401
-    
-    bank = QuestionBank.query.get_or_404(bank_id)
-    data = request.get_json()
-    bank.name = data.get('name')
-    db.session.commit()
-    return jsonify({'success': True})
-
-@app.route('/api/bank/<int:bank_id>', methods=['DELETE'])
-def delete_bank(bank_id):
-    if 'role' not in session or session['role'] != 'teacher':
-        return jsonify({'error': 'Unauthorized'}), 401
-    
-    bank = QuestionBank.query.get_or_404(bank_id)
-    Question.query.filter_by(bank_id=bank_id).delete()
-    db.session.delete(bank)
-    db.session.commit()
-    return jsonify({'success': True})
-
-# ----- 预设API -----
-
-@app.route('/save_test_settings', methods=['POST'])
-def save_test_settings():
-    if 'role' not in session or session['role'] != 'teacher':
-        return redirect(url_for('teacher_login'))
-    
-    # 先将现有测试设为非激活状态，保证学生只能参加最新一次测试
-    Test.query.update({Test.is_active: False})
-
-    # 保存/更新预设
-    preset_id = request.form.get('preset_id', type=int)
-    if preset_id:
-        preset = TestPreset.query.get(preset_id)
-    else:
-        preset = None
-
-    if not preset:
-        preset = TestPreset()
-        db.session.add(preset)
-
-    preset.title = request.form.get('test_title')
-    preset.single_choice_count = request.form.get('single_choice_count', type=int)
-    preset.single_choice_score = request.form.get('single_choice_score', type=int)
-    preset.multiple_choice_count = request.form.get('multiple_choice_count', type=int)
-    preset.multiple_choice_score = request.form.get('multiple_choice_score', type=int)
-    preset.true_false_count = request.form.get('true_false_count', type=int)
-    preset.true_false_score = request.form.get('true_false_score', type=int)
-    preset.fill_blank_count = request.form.get('fill_blank_count', type=int)
-    preset.fill_blank_score = request.form.get('fill_blank_score', type=int)
-    preset.short_answer_count = request.form.get('short_answer_count', type=int)
-    preset.short_answer_score = request.form.get('short_answer_score', type=int)
-    preset.single_choice_bank_id = request.form.get('single_choice_bank', type=int)
-    preset.multiple_choice_bank_id = request.form.get('multiple_choice_bank', type=int)
-    preset.true_false_bank_id = request.form.get('true_false_bank', type=int)
-    preset.fill_blank_bank_id = request.form.get('fill_blank_bank', type=int)
-    preset.short_answer_bank_id = request.form.get('short_answer_bank', type=int)
-    preset.allow_student_choice = bool(request.form.get('allow_student_choice'))
-
-    # 创建新的 Test 记录
-    test = Test()
-    test.title = request.form.get('test_title')
-    test.allow_student_choice = bool(request.form.get('allow_student_choice'))
-
-    # 工具函数：根据bank_id获取题目数量
-    def bank_size(bid):
-        return Question.query.filter_by(bank_id=bid).count() if bid else 0
-
-    # --- 单选题 ---
-    sc_bank_id = request.form.get('single_choice_bank', type=int)
-    sc_count_req = request.form.get('single_choice_count', type=int)
-    sc_max = bank_size(sc_bank_id)
-    test.single_choice_bank_id = sc_bank_id
-    test.single_choice_count = min(sc_count_req or 0, sc_max)
-    test.single_choice_score = request.form.get('single_choice_score', type=int)
-
-    # --- 多选题 ---
-    mc_bank_id = request.form.get('multiple_choice_bank', type=int)
-    mc_count_req = request.form.get('multiple_choice_count', type=int)
-    mc_max = bank_size(mc_bank_id)
-    test.multiple_choice_bank_id = mc_bank_id
-    test.multiple_choice_count = min(mc_count_req or 0, mc_max)
-    test.multiple_choice_score = request.form.get('multiple_choice_score', type=int)
-
-    # --- 判断题 ---
-    tf_bank_id = request.form.get('true_false_bank', type=int)
-    tf_count_req = request.form.get('true_false_count', type=int)
-    tf_max = bank_size(tf_bank_id)
-    test.true_false_bank_id = tf_bank_id
-    test.true_false_count = min(tf_count_req or 0, tf_max)
-    test.true_false_score = request.form.get('true_false_score', type=int)
-
-    # --- 填空题 ---
-    fb_bank_id = request.form.get('fill_blank_bank', type=int)
-    fb_count_req = request.form.get('fill_blank_count', type=int)
-    fb_max = bank_size(fb_bank_id)
-    test.fill_blank_bank_id = fb_bank_id
-    test.fill_blank_count = min(fb_count_req or 0, fb_max)
-    test.fill_blank_score = request.form.get('fill_blank_score', type=int)
-
-    # --- 简答题 ---
-    sa_bank_id = request.form.get('short_answer_bank', type=int)
-    sa_count_req = request.form.get('short_answer_count', type=int)
-    sa_max = bank_size(sa_bank_id)
-    test.short_answer_bank_id = sa_bank_id
-    test.short_answer_count = min(sa_count_req or 0, sa_max)
-    test.short_answer_score = request.form.get('short_answer_score', type=int)
-
-    # 重新计算总分
-    test.total_score = (
-        (test.single_choice_count * (test.single_choice_score or 0)) +
-        (test.multiple_choice_count * (test.multiple_choice_score or 0)) +
-        (test.true_false_count * (test.true_false_score or 0)) +
-        (test.fill_blank_count * (test.fill_blank_score or 0)) +
-        (test.short_answer_count * (test.short_answer_score or 0))
-    )
-
-    # 创建新的 TestPreset 参数已上移
-    # --- end counts / banks ---
-    
-    db.session.add(test)
-    db.session.commit()
-    
-    flash('测试设置已保存')
-    return redirect(url_for('teacher_dashboard'))
-
-@app.route('/export_bank/<int:bank_id>')
-def export_bank(bank_id):
-    """导出指定题库为 Excel 文件"""
-    if 'role' not in session or session['role'] != 'teacher':
-        flash('未授权')
-        return redirect(url_for('teacher_dashboard'))
-
-    bank = QuestionBank.query.get_or_404(bank_id)
-    questions = bank.questions
-    if not questions:
-        flash('题库为空')
-        return redirect(url_for('teacher_bank', bank_id=bank_id))
-
-    data = []
-    qtype = bank.question_type
-    if qtype == 'single_choice':
-        columns = ['题干', '选项A', '选项B', '选项C', '选项D', '正确答案', '分值', '解析']
-        for q in questions:
-            data.append([q.content, q.option_a, q.option_b, q.option_c, q.option_d, q.correct_answer, q.score, q.explanation])
-    elif qtype == 'multiple_choice':
-        columns = ['题干', '选项A', '选项B', '选项C', '选项D', '选项E', '正确答案', '分值', '解析']
-        for q in questions:
-            data.append([q.content, q.option_a, q.option_b, q.option_c, q.option_d, q.option_e, q.correct_answer, q.score, q.explanation])
-    elif qtype == 'true_false':
-        columns = ['题干', '正确答案', '分值', '解析']
-        for q in questions:
-            data.append([q.content, q.correct_answer, q.score, q.explanation])
-    elif qtype == 'short_answer':
-        columns = ['题干', '参考答案', '分值', '解析']
-        for q in questions:
-            data.append([q.content, q.correct_answer, q.score, q.explanation])
-    else:  # fill_blank
-        columns = ['题干', '正确答案', '分值', '解析']
-        for q in questions:
-            data.append([q.content, q.correct_answer, q.score, q.explanation])
-
-    df = pd.DataFrame(data, columns=columns)
-    output = BytesIO()
-    df.to_excel(output, index=False)
-    output.seek(0)
-    filename = f"{bank.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    return send_file(output, as_attachment=True, download_name=filename, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-
-# 初始化数据库
-def init_db():
-    with app.app_context():
-        db.create_all()
-
-        # ---- 若旧表缺少新列，动态添加 ----
-        def ensure_column(table, column, col_type):
-            info = db.session.execute(text(f"PRAGMA table_info({table})")).fetchall()
-            if column not in [row[1] for row in info]:
-                db.session.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
-                db.session.commit()
-
-        for col in [
-            ('single_choice_bank_id', 'INTEGER'),
-            ('multiple_choice_bank_id', 'INTEGER'),
-            ('true_false_bank_id', 'INTEGER'),
-            ('fill_blank_bank_id', 'INTEGER'),
-            ('short_answer_bank_id', 'INTEGER'),
-            ('allow_student_choice', 'BOOLEAN')]:
-            ensure_column('test', col[0], col[1])
-
-        for tbl,col in [
-            ('test', 'single_choice_bank_id'),
-            ('test', 'multiple_choice_bank_id'),
-            ('test', 'true_false_bank_id'),
-            ('test', 'fill_blank_bank_id'),
-            ('test', 'short_answer_bank_id'),
-            ('question', 'image_path'),
-            ('short_answer_submission', 'image_path')
-        ]:
-            ensure_column(tbl, col, 'TEXT' if col.endswith('image_path') else 'INTEGER')
-        
-        # 为 test_preset 表添加 allow_student_choice 字段
-        ensure_column('test_preset', 'allow_student_choice', 'BOOLEAN')
-
-        # 默认管理员
-        admin = User.query.filter_by(username='admin').first()
-        if not admin:
-            admin = User(username='admin', role='teacher')
-            admin.set_password('admin')
-            db.session.add(admin)
-            db.session.commit()
-
-# 初始化数据库（无论作为脚本运行还是被WSGI加载）
-init_db()
-
-# ---- TestPreset API ----
-@app.route('/api/test_presets')
-def test_presets_list():
-    if 'role' not in session or session['role'] != 'teacher':
-        return jsonify([])
-    presets = TestPreset.query.order_by(TestPreset.created_at.desc()).all()
-    return jsonify([{'id': p.id, 'title': p.title} for p in presets])
-
-@app.route('/api/test_presets/<int:preset_id>', methods=['GET', 'DELETE'])
-def test_preset_detail(preset_id):
-    if 'role' not in session or session['role'] != 'teacher':
-        return jsonify({'error': 'unauthorized'}), 401
-    if request.method == 'DELETE':
-        p = TestPreset.query.get_or_404(preset_id)
-        db.session.delete(p)
-        db.session.commit()
-        return jsonify({'success': True})
-
-    p = TestPreset.query.get_or_404(preset_id)
-    return jsonify({
-        'id': p.id,
-        'title': p.title,
-        'single_choice_count': p.single_choice_count,
-        'single_choice_score': p.single_choice_score,
-        'multiple_choice_count': p.multiple_choice_count,
-        'multiple_choice_score': p.multiple_choice_score,
-        'true_false_count': p.true_false_count,
-        'true_false_score': p.true_false_score,
-        'fill_blank_count': p.fill_blank_count,
-        'fill_blank_score': p.fill_blank_score,
-        'short_answer_count': p.short_answer_count,
-        'short_answer_score': p.short_answer_score,
-        'single_choice_bank_id': p.single_choice_bank_id,
-        'multiple_choice_bank_id': p.multiple_choice_bank_id,
-        'true_false_bank_id': p.true_false_bank_id,
-        'fill_blank_bank_id': p.fill_blank_bank_id,
-        'short_answer_bank_id': p.short_answer_bank_id,
-        'allow_student_choice': p.allow_student_choice
-    })
-
-# 新增：获取当前测试设置（公开API，学生可访问）
-@app.route('/api/current_test_settings')
-def current_test_settings():
-    # 获取最新的测试设置
-    last_test = Test.query.order_by(Test.created_at.desc()).first()
-    if not last_test:
-        return jsonify({'allow_student_choice': False})
-    
-    return jsonify({
-        'allow_student_choice': last_test.allow_student_choice if hasattr(last_test, 'allow_student_choice') else False
-    })
-
-# 新增：公开获取测试预设列表（学生可访问）
-@app.route('/api/test_presets_public')
-def test_presets_public():
-    presets = TestPreset.query.order_by(TestPreset.created_at.desc()).all()
-    return jsonify([{'id': p.id, 'title': p.title} for p in presets])
-
-# ----- 简答题批改 -----
-
-@app.route('/grade_short_answer/<int:sa_id>', methods=['GET', 'POST'])
-def grade_short_answer(sa_id):
-    if 'role' not in session or session['role'] != 'teacher':
-        return redirect(url_for('teacher_login'))
-    sa = ShortAnswerSubmission.query.get_or_404(sa_id)
-    question = Question.query.get(sa.question_id)
-    if request.method == 'POST':
-        sa.score = request.form.get('score', type=int)
-        sa.comment = request.form.get('comment')
-        sa.graded_bool = True
-        # 更新 TestResult 总分
-        tr = TestResult.query.get(sa.result_id)
-        # 先扣除旧分再加新分
-        old = sa.score or 0
-        delta = sa.score - old
-        tr.score = (tr.score or 0) + delta
-        db.session.commit()
-        flash('批改已保存')
-        return redirect(url_for('short_answer_list'))
-    return render_template('grade_short_answer.html', sa=sa, question=question)
-
-# 未批改列表
-@app.route('/short_answers')
-def short_answer_list():
-    if 'role' not in session or session['role'] != 'teacher':
-        return redirect(url_for('teacher_login'))
-    pending = ShortAnswerSubmission.query.filter_by(graded_bool=False).order_by(ShortAnswerSubmission.created_at).all()
-    return render_template('short_answer_list.html', submissions=pending)
-
-@app.route('/api/upload_image', methods=['POST'])
-def upload_image():
-    if 'file' not in request.files:
-        return jsonify({'error':'no file'}),400
-    f=request.files['file']
-    if f.filename=='':
-        return jsonify({'error':'empty'}),400
-    ext=f.filename.rsplit('.',1)[-1].lower()
-    if ext not in ALLOWED_IMG_EXT:
-        return jsonify({'error':'ext'}),400
-    f.seek(0,2); size=f.tell(); f.seek(0)
-    if size>MAX_IMG_SIZE:
-        return jsonify({'error':'size'}),400
-    day=datetime.now().strftime('%Y%m%d')
-    save_dir=os.path.join('static','uploads',day)
-    os.makedirs(save_dir, exist_ok=True)
-    filename=secure_filename(str(uuid.uuid4())+'.'+ext)
-    path=os.path.join(save_dir,filename)
-    f.save(path)
-    return jsonify({'url':'/'+path.replace('\\','/')})
-
 if __name__ == '__main__':
     init_db()
-    app.run(debug=True, host='0.0.0.0', port=8000) 
+    app.run(debug=True, host='0.0.0.0', port=8000)

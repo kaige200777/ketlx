@@ -14,6 +14,16 @@
                     <h1 class="mb-4">课堂练习系统</h1>
                 </div>
                 <div class="card-body">
+                    {% with messages = get_flashed_messages() %}
+                        {% if messages %}
+                            {% for message in messages %}
+                            <div class="alert alert-warning alert-dismissible fade show" role="alert">
+                                <strong>⚠️ 提示：</strong> {{ message }}
+                                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                            </div>
+                            {% endfor %}
+                        {% endif %}
+                    {% endwith %}
                     <form method="post" action="/student/start" class="mb-3">
                         <div class="mb-3">
                             <label for="name" class="form-label">姓名</label>
@@ -66,16 +76,18 @@
         function loadTestPresets() {
             fetch('/api/test_presets_public')
                 .then(response => response.json())
-                .then(presets => {
+                .then(data => {
                     const select = document.getElementById('test_content');
                     select.innerHTML = '<option value="">-- 请选择测试内容 --</option>';
                     
-                    presets.forEach(preset => {
-                        const option = document.createElement('option');
-                        option.value = preset.id;
-                        option.textContent = preset.title;
-                        select.appendChild(option);
-                    });
+                    if (data.presets && Array.isArray(data.presets)) {
+                        data.presets.forEach(preset => {
+                            const option = document.createElement('option');
+                            option.value = preset.id;
+                            option.textContent = preset.title;
+                            select.appendChild(option);
+                        });
+                    }
                 })
                 .catch(error => {
                     console.error('加载测试预设失败:', error);

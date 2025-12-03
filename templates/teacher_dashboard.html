@@ -101,10 +101,10 @@
                         <!-- 题库列表JS渲染 -->
                         </div>
                     <div class="mt-3">
-                        <form id="importForm" action="{{ url_for('import_questions') }}" method="post" enctype="multipart/form-data">
+                        <form id="importForm" action="{{ url_for('import_questions', question_type='single_choice') }}" method="post" enctype="multipart/form-data">
                             <input type="hidden" name="question_type" id="importTypeInput" value="single_choice">
                             <input type="hidden" name="bank_name" value="">
-                            <input type="file" id="csvFileInput" name="csv_file" accept=".csv,.xlsx" style="display:none" required>
+                            <input type="file" id="csvFileInput" name="file" accept=".csv,.xlsx" style="display:none" required>
                             <button type="button" id="importBtn" class="btn btn-primary w-100">导入题库</button>
                         </form>
                         </div>
@@ -245,13 +245,13 @@
                             </div>
                             <div class="col-md-4 mb-3">
                                 <div class="form-check">
-                                    <input class="form-check-input" type="checkbox" id="allow_student_choice" name="allow_student_choice" value="1" {% if last_test and last_test.allow_student_choice %}checked{% endif %}>
+                                    <input class="form-check-input" type="checkbox" id="allow_student_choice" name="allow_student_choice" value="true" {% if last_test and last_test.allow_student_choice %}checked{% endif %}>
                                     <label class="form-check-label" for="allow_student_choice">
                                         允许学生自选测试内容
                                     </label>
                                 </div>
                             </div>
-                            <div class="col-md-4 mb-3">
+                            <div class="col-md-12 mb-3">
                                 <button type="submit" class="btn btn-primary w-100">保存设置</button>
                             </div>
                         </div>
@@ -330,8 +330,18 @@
         }
 
         function loadBankList() {
-            fetch('/api/question_banks').then(r=>r.json()).then(data => {
-                bankData = data;
+            fetch('/api/question_banks').then(r=>r.json()).then(response => {
+                // 将返回的题库列表按题型分组
+                const grouped = {};
+                if (response.success && response.banks) {
+                    response.banks.forEach(bank => {
+                        if (!grouped[bank.question_type]) {
+                            grouped[bank.question_type] = [];
+                        }
+                        grouped[bank.question_type].push(bank);
+                    });
+                }
+                bankData = grouped;
                 renderBankList();
                 updateBankSelects();
             });
@@ -390,6 +400,9 @@
             button.onclick = function() {
                 currentType = this.getAttribute('data-type');
                 document.getElementById('importTypeInput').value = currentType;
+                // 更新表单的 action URL
+                const importForm = document.getElementById('importForm');
+                importForm.action = `/import_questions/${currentType}`;
                 renderBankList();
             };
         });
@@ -408,21 +421,39 @@
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({name: newName})
-                }).then(r => {
-                    if (r.ok) loadBankList();
-                    else alert('重命名失败');
+                })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        alert('✅ ' + data.message);
+                        loadBankList();
+                    } else {
+                        alert('❌ ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    alert('❌ 重命名失败: ' + error.message);
                 });
             }
         }
 
         // 删除题库
         function deleteBank(bankId) {
-            if (confirm('确定要删除这个题库吗？')) {
+            if (confirm('确定要删除这个题库吗？此操作将删除题库中的所有题目，且无法恢复！')) {
                 fetch(`/api/bank/${bankId}`, {
                     method: 'DELETE'
-                }).then(r => {
-                    if (r.ok) loadBankList();
-                    else alert('删除失败');
+                })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        alert('✅ ' + data.message);
+                        loadBankList();
+                    } else {
+                        alert('❌ ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    alert('❌ 删除失败: ' + error.message);
                 });
             }
         }
@@ -486,18 +517,54 @@
                 // 自动设置 bank_name 为文件名（去掉扩展名）
                 const fileName = this.files[0].name.replace(/\.[^.]+$/, '');
                 document.querySelector('input[name="bank_name"]').value = fileName;
-                importForm.submit();
+                
+                // 使用 AJAX 提交，而不是传统表单提交
+                const formData = new FormData(importForm);
+                const importBtn = document.getElementById('importBtn');
+                
+                // 禁用按钮，显示加载状态
+                importBtn.disabled = true;
+                importBtn.textContent = '导入中...';
+                
+                fetch(importForm.action, {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        // 显示成功消息
+                        alert(`✅ ${data.message}\n\n导入数量: ${data.imported_count}\n错误数量: ${data.error_count}`);
+                        // 刷新题库列表
+                        loadBankList();
+                    } else {
+                        // 显示错误消息
+                        alert(`❌ 导入失败\n\n${data.message}`);
+                    }
+                })
+                .catch(error => {
+                    alert(`❌ 导入失败\n\n网络错误: ${error.message}`);
+                })
+                .finally(() => {
+                    // 恢复按钮状态
+                    importBtn.disabled = false;
+                    importBtn.textContent = '导入题库';
+                    // 清空文件选择
+                    document.getElementById('csvFileInput').value = '';
+                });
             }
         });
 
         // 预设功能
         function loadPresets(){
-            fetch('/api/test_presets').then(r=>r.json()).then(list=>{
+            fetch('/api/test_presets').then(r=>r.json()).then(data=>{
                 const sel=document.getElementById('presetSelect');
                 sel.innerHTML='<option value="">-- 选择预设 --</option>';
-                list.forEach(p=>{
-                    sel.innerHTML+=`<option value="${p.id}">${p.title}</option>`;
-                });
+                if(data.success && data.presets){
+                    data.presets.forEach(p=>{
+                        sel.innerHTML+=`<option value="${p.id}">${p.title}</option>`;
+                    });
+                }
             });
         }
 
@@ -506,7 +573,9 @@
             // 切换启用/禁用删除按钮
             document.getElementById('deletePresetBtn').disabled=!id;
             if(!id){document.getElementById('preset_id').value='';return;}
-            fetch(`/api/test_presets/${id}`).then(r=>r.json()).then(data=>{
+            fetch(`/api/test_presets/${id}`).then(r=>r.json()).then(response=>{
+                if(!response.success || !response.preset) return;
+                const data = response.preset;
                 document.getElementById('preset_id').value=data.id;
                 document.getElementById('test_title').value=data.title;
                 const fields=[
@@ -528,18 +597,25 @@
         document.getElementById('deletePresetBtn').addEventListener('click',function(){
             const sel=document.getElementById('presetSelect');
             const id=sel.value;
+            const presetName = sel.options[sel.selectedIndex].text;
             if(!id)return;
-            if(!confirm('确定删除该预设吗？')) return;
-            fetch(`/api/test_presets/${id}`,{method:'DELETE'}).then(r=>{
-                if(r.ok){
-                    sel.value='';
-                    document.getElementById('preset_id').value='';
-                    loadPresets();
-                    this.disabled=true;
-                }else{
-                    alert('删除失败');
-                }
-            });
+            if(!confirm(`确定删除预设 "${presetName}" 吗？`)) return;
+            fetch(`/api/test_presets/${id}`,{method:'DELETE'})
+                .then(r=>r.json())
+                .then(data=>{
+                    if(data.success){
+                        alert('✅ 预设删除成功');
+                        sel.value='';
+                        document.getElementById('preset_id').value='';
+                        loadPresets();
+                        this.disabled=true;
+                    }else{
+                        alert('❌ 删除失败: ' + data.message);
+                    }
+                })
+                .catch(error=>{
+                    alert('❌ 删除失败: ' + error.message);
+                });
         });
 
         loadPresets();
@@ -550,17 +626,67 @@
         calculateTotalScore();
 
         document.getElementById('testSettingsForm').addEventListener('submit',function(e){
+            e.preventDefault(); // 阻止默认表单提交
+            
             const types=['single_choice','multiple_choice','true_false','fill_blank','short_answer'];
+            
+            // 验证题库选择
             for(const t of types){
                 const cnt=parseInt(document.querySelector(`input[name="${t}_count"]`).value)||0;
                 const sel=document.querySelector(`select[name="${t}_bank"]`);
                 if(cnt>0 && sel && !sel.value){
-                    e.preventDefault();
                     alert('请为含题量的题型选择题库！');
                     sel.focus();
                     return false;
                 }
             }
+            
+            // 使用 AJAX 提交表单
+            const formData = new FormData(this);
+            const submitBtn = this.querySelector('button[type="submit"]');
+            
+            // 禁用提交按钮
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.textContent = '保存中...';
+            }
+            
+            fetch(this.action, {
+                method: 'POST',
+                body: formData
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    let successMsg = '✅ ' + data.message + '\n\n总分: ' + data.total_score;
+                    
+                    // 如果有警告信息，显示出来
+                    if (data.warnings && data.warnings.length > 0) {
+                        successMsg += '\n\n⚠️ 警告：\n' + data.warnings.join('\n');
+                        successMsg += '\n\n建议：请检查分数设置，确保每个题型的分数大于0';
+                    }
+                    
+                    alert(successMsg);
+                    // 总是刷新预设列表，因为每次保存都会创建预设
+                    loadPresets();
+                } else {
+                    let errorMsg = '❌ ' + data.message;
+                    if (data.errors && data.errors.length > 0) {
+                        errorMsg += '\n\n错误详情：\n' + data.errors.join('\n');
+                    }
+                    alert(errorMsg);
+                }
+            })
+            .catch(error => {
+                alert('❌ 保存失败\n\n网络错误: ' + error.message);
+            })
+            .finally(() => {
+                // 恢复提交按钮
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = '保存设置';
+                }
+            });
         });
     </script>
 </body>
