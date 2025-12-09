@@ -36,6 +36,13 @@ function attachImagePaste(element) {
 function insertAtCursor(textarea, text) {
     // works for textarea & input
     if (document.activeElement !== textarea) textarea.focus();
+    
+    // 如果是图片标签，先移除所有现有的图片标签（只保留最后一张）
+    if (text.includes('<img')) {
+        // 移除所有现有的图片标签
+        textarea.value = textarea.value.replace(/<img[^>]*>/g, '');
+    }
+    
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
     const before = textarea.value.substring(0, start);
@@ -43,11 +50,52 @@ function insertAtCursor(textarea, text) {
     textarea.value = before + text + after;
     const newPos = before.length + text.length;
     textarea.setSelectionRange(newPos, newPos);
+    
+    // 更新字数统计
+    updateCharCount(textarea);
+}
+
+// 更新字数统计
+function updateCharCount(textarea) {
+    const questionId = textarea.dataset.questionId;
+    if (!questionId) return;
+    
+    // 计算纯文本字数（排除HTML标签）
+    const textOnly = textarea.value.replace(/<[^>]*>/g, '');
+    const charCount = textOnly.length;
+    
+    const countSpan = document.getElementById('charCount_' + questionId);
+    if (countSpan) {
+        countSpan.textContent = charCount;
+        
+        // 如果超过200字，显示警告颜色
+        if (charCount >= 200) {
+            countSpan.style.color = 'red';
+            countSpan.style.fontWeight = 'bold';
+        } else if (charCount >= 180) {
+            countSpan.style.color = 'orange';
+        } else {
+            countSpan.style.color = '';
+            countSpan.style.fontWeight = '';
+        }
+    }
 }
 
 // 初始化：等待 DOMReady
 document.addEventListener('DOMContentLoaded', () => {
-    document.querySelectorAll('textarea.allow-img-paste').forEach(el => attachImagePaste(el));
+    document.querySelectorAll('textarea.allow-img-paste').forEach(el => {
+        attachImagePaste(el);
+        
+        // 添加输入事件监听，实时更新字数统计
+        el.addEventListener('input', function() {
+            updateCharCount(this);
+        });
+        
+        // 初始化字数统计
+        updateCharCount(el);
+    });
+    
     // 将函数暴露到全局，便于后续动态调用
     window.attachImagePaste = attachImagePaste;
+    window.updateCharCount = updateCharCount;
 }); 

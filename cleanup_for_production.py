@@ -33,6 +33,10 @@ docs_to_move = [
     'TEMPLATE_COLUMNS_SPEC.md',
     'TEMPLATE_IMPORT_FIX.md',
     'ZERO_SCORE_WARNING_FIX.md',
+    # 新增的修复文档
+    'FILL_BLANK_DIAGNOSIS.md',
+    'FILL_BLANK_SUBMIT_FIX.md',
+    'SHORT_ANSWER_LIMIT_FIX.md',
 ]
 
 # 需要删除的临时测试文件
@@ -52,6 +56,11 @@ files_to_delete = [
     'test_presets_api.py',
     'test_statistics.html',
     'test_template_import.py',
+    # 新增的调试文件
+    'check_fill_blank_questions.py',
+    'check_test_23_results.py',
+    'debug_fill_blank_in_result.py',
+    'test_fill_blank_stats.py',
 ]
 
 print("\n" + "=" * 60)

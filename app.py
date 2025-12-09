@@ -478,12 +478,17 @@ def submit_test():
         
     # 获取所有答案
     answers = {}
+    fill_blank_questions_ids = set()  # 记录填空题的ID
+    
     for key in request.form:
         if key.startswith('answer_'):
             parts = key.split('_')
-            # 跳过填空题的子字段（如 answer_123_1）和简答题的图片URL字段
+            # 识别填空题的子字段（如 answer_123_1）
             if len(parts) > 2 and parts[2].isdigit():
-                continue  # 填空题子字段，跳过
+                # 这是填空题的子字段，记录question_id但不处理
+                question_id = int(parts[1])
+                fill_blank_questions_ids.add(question_id)
+                continue
             if parts[-1] == 'img' and parts[-2] == 'url':
                 continue  # 图片URL字段，跳过
             question_id = int(parts[1])
@@ -497,6 +502,19 @@ def submit_test():
             else:
                 # 多选题，拼接为逗号分隔的大写字母，顺序统一
                 answers[question_id] = ','.join(sorted([v.strip().upper() for v in values if v.strip()]))
+    
+    # 处理填空题：从request.form中收集填空题答案
+    for question_id in fill_blank_questions_ids:
+        student_fill_ins = []
+        for i in range(1, 5):  # 假设最多4个填空输入框
+            student_answer = request.form.get(f'answer_{question_id}_{i}', '').strip()
+            if student_answer:
+                student_fill_ins.append(student_answer)
+        # 将填空题答案添加到answers字典
+        if student_fill_ins:
+            answers[question_id] = '、'.join(student_fill_ins)
+        else:
+            answers[question_id] = ''  # 即使没有答案也要记录，以便显示
     
     # 计算得分
     total_score = 0
@@ -523,31 +541,44 @@ def submit_test():
         elif question.question_type == 'fill_blank':
             # 处理填空题多个答案
             correct_fill_ins = [f.strip().lower() for f in question.correct_answer.split('、') if f.strip()]
+            student_fill_ins = [f.strip().lower() for f in answer.split('、') if f.strip()]
             num_fill_ins = len(correct_fill_ins)
+            
             if num_fill_ins > 0:
                 score = test_config.get('fill_blank_score') if isinstance(test_config, dict) else test_config.fill_blank_score
                 score_per_fill_in = round((score or 0) / num_fill_ins, 1)
                 fill_blank_score = 0
-                student_fill_ins = []
-                for i in range(1, 5): # 假设最多4个填空输入框
-                    student_answer = request.form.get(f'answer_{question_id}_{i}', '').strip().lower()
-                    student_fill_ins.append(student_answer)
-                    if i <= num_fill_ins and student_answer == correct_fill_ins[i-1]:
+                
+                # 比较每个填空
+                for i in range(min(len(student_fill_ins), num_fill_ins)):
+                    if student_fill_ins[i] == correct_fill_ins[i]:
                         fill_blank_score += score_per_fill_in
+                
                 total_score += fill_blank_score
-                # 将学生填空答案存入answers字典，以便test_result页显示
-                cleaned = [s.strip() for s in student_fill_ins if s.strip()]
-                answers[question_id] = '、'.join(cleaned)
-            else:
-                # 如果正确答案格式错误或为空，该题不得分，学生答案也记录
-                student_fill_ins = []
-                for i in range(1, 5):
-                    student_fill_ins.append(request.form.get(f'answer_{question_id}_{i}', '').strip().lower())
-                cleaned = [s.strip() for s in student_fill_ins if s.strip()]
-                answers[question_id] = '、'.join(cleaned)
         elif question.question_type == 'short_answer':
             # 简答题答案可能包含HTML标签（图片等），直接获取原始内容
             student_answer = request.form.get(f'answer_{question_id}', '').strip()
+            
+            # 限制字数：移除HTML标签后不超过200字
+            import re
+            text_only = re.sub(r'<[^>]*>', '', student_answer)
+            if len(text_only) > 200:
+                text_only = text_only[:200]
+                # 重新组合答案（保留图片但截断文本）
+                img_tags = re.findall(r'<img[^>]*>', student_answer)
+                if img_tags:
+                    # 只保留最后一张图片
+                    student_answer = text_only + img_tags[-1]
+                else:
+                    student_answer = text_only
+            else:
+                # 限制图片数量：只保留最后一张
+                img_tags = re.findall(r'<img[^>]*>', student_answer)
+                if len(img_tags) > 1:
+                    # 移除所有图片，只保留最后一张
+                    text_without_imgs = re.sub(r'<img[^>]*>', '', student_answer)
+                    student_answer = text_without_imgs + img_tags[-1]
+            
             # 将简答题数据添加到answers字典中（不进行大小写转换）
             answers[question_id] = student_answer
     # 题目循环结束后，只插入一次TestResult
@@ -852,7 +883,7 @@ def delete_test(test_id):
             db.session.delete(test)
         
         db.session.commit()
-        flash('测试及其所有成绩已删除', 'success')
+        # flash('测试及其所有成绩已删除', 'success')  # 移除成功提示
         
     except Exception as e:
         db.session.rollback()
@@ -1060,7 +1091,7 @@ def grade_short_answer_by_result():
             history.lowest_score = lowest_score
             db.session.commit()
         
-        flash('评分成功')
+        # flash('评分成功')  # 移除成功提示
     except Exception as e:
         db.session.rollback()
         flash(f'评分失败：{str(e)}')
@@ -1928,7 +1959,7 @@ def change_password():
     
     user.set_password(new_password)
     db.session.commit()
-    flash('密码修改成功')
+    # flash('密码修改成功')  # 移除成功提示
     return redirect(url_for('teacher_dashboard'))
 
 

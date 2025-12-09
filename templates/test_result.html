@@ -95,7 +95,7 @@
                         <div class="d-flex justify-content-between align-items-center">
                             <span>第{{ loop.index }}题</span>
                             {% if question.question_type == 'short_answer' %}
-                            <span class="badge bg-secondary">
+                            <span class="badge {% if question.score is not none %}bg-success{% else %}bg-danger{% endif %}">
                                 {% if question.score is not none %}已评分{% else %}待评分{% endif %}
                             </span>
                             {% else %}
