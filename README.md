@@ -31,11 +31,13 @@
 - **数据分析**：统计平均分、最高分、最低分等数据
 - **导出功能**：支持导出测试统计数据
 
-#### 4. 简答题批改（人工批改）
-- **在线批改**：支持在线批改学生的简答题答案
+#### 4. 简答题批改
+- **人工批改**：支持在线批改学生的简答题答案
+- **AI批改**：支持使用AI自动批改简答题（需配置AI服务）
 - **图片上传**：学生可上传图片作为答案
 - **评分注释**：支持添加评分和评语
 - **批量处理**：支持批量查看未批改的简答题
+- **批改方式选择**：可在测试设置时选择人工批改或AI批改
 
 #### 5. 系统管理
 - **用户管理**：教师登录、修改密码
@@ -74,6 +76,11 @@
 - **Pandas 2.0.3** - 数据处理
 - **OpenPyXL 3.1.2** - Excel 文件处理
 - **NumPy 1.24.3** - 数值计算
+
+### AI服务（可选）
+- **OpenAI API** - 支持 OpenAI 兼容的 API 服务
+- **DeepSeek** - 支持 DeepSeek AI 服务
+- 其他兼容 OpenAI API 格式的服务
 
 ### 数据库
 - **SQLite** - 轻量级数据库（默认）
@@ -288,8 +295,11 @@ docker run -d -p 8000:8000 test-system
 1. 在"设置测试参数"区域配置各题型的题目数量和分值
 2. 为每种题型选择题库
 3. 设置测试标题
-4. 选择是否允许学生自选测试内容（勾选之后，学生端测试时可以选择已设定的测试内容）
-5. 点击"保存设置"
+4. 选择简答题批改方式：
+   - **人工批改**：教师手动批改简答题
+   - **AI批改**：使用AI自动批改简答题（需先配置AI服务）
+5. 选择是否允许学生自选测试内容（勾选之后，学生端测试时可以选择已设定的测试内容）
+6. 点击"保存设置"
 
 #### 4. 创建测试预设
 
@@ -341,6 +351,8 @@ docker run -d -p 8000:8000 test-system
 ├── app.py                  # 主应用程序文件
 ├── run.py                  # 运行脚本
 ├── wsgl.py                 # WSGI 入口文件
+├── config.py               # 配置文件（包含AI配置）
+├── ai_grading_service.py   # AI批改服务
 ├── requirements.txt        # 项目依赖
 ├── README.md              # 项目说明文档
 ├── instance/              # 实例文件夹
@@ -413,6 +425,72 @@ POST /api/upload_image
 ```
 
 ## ⚙️ 配置说明
+
+### AI批改配置（可选）
+
+如果需要使用AI批改简答题功能，需要在 `config.py` 中配置AI服务：
+
+```python
+# AI批改配置
+AI_GRADING_CONFIG = {
+    'enabled': True,  # 是否启用AI批改
+    'provider': 'openai',  # AI服务提供商：openai, deepseek 等
+    'api_key': 'your-api-key-here',  # API密钥
+    'base_url': 'https://api.deepseek.com',  # API基础URL（可选）
+    'model': 'deepseek-chat',  # 使用的模型
+    'timeout': 30,  # 请求超时时间（秒）
+    'max_retries': 2  # 最大重试次数
+}
+```
+
+**支持的AI服务提供商：**
+
+1. **OpenAI**
+   ```python
+   AI_GRADING_CONFIG = {
+       'enabled': True,
+       'provider': 'openai',
+       'api_key': 'sk-...',
+       'model': 'gpt-3.5-turbo'
+   }
+   ```
+
+2. **DeepSeek**
+   ```python
+   AI_GRADING_CONFIG = {
+       'enabled': True,
+       'provider': 'openai',  # DeepSeek兼容OpenAI API
+       'api_key': 'sk-...',
+       'base_url': 'https://api.deepseek.com',
+       'model': 'deepseek-chat'
+   }
+   ```
+
+3. **其他兼容OpenAI API的服务**
+   ```python
+   AI_GRADING_CONFIG = {
+       'enabled': True,
+       'provider': 'openai',
+       'api_key': 'your-api-key',
+       'base_url': 'https://your-api-endpoint.com',
+       'model': 'your-model-name'
+   }
+   ```
+
+**配置说明：**
+- `enabled`: 是否启用AI批改功能
+- `provider`: AI服务提供商标识
+- `api_key`: API密钥（必需）
+- `base_url`: API基础URL（可选，默认使用OpenAI官方地址）
+- `model`: 使用的AI模型名称
+- `timeout`: API请求超时时间（秒）
+- `max_retries`: 请求失败时的最大重试次数
+
+**注意事项：**
+- 如果不配置或配置错误，AI批改选项将自动禁用
+- 系统会在教师控制面板自动检测AI配置状态
+- AI批改需要消耗API调用额度，请注意成本控制
+- 建议先在测试环境验证AI批改效果
 
 ### 数据库配置
 
@@ -512,7 +590,46 @@ MAX_IMG_SIZE = 2 * 1024 * 1024  # 2MB
 - 关闭占用端口的程序
 - 使用其他端口
 
+### 6. AI批改不可用
+
+**问题**：AI批改选项显示为灰色或禁用状态
+
+**解决**：
+- 检查 `config.py` 中的 `AI_GRADING_CONFIG` 配置
+- 确认 `enabled` 设置为 `True`
+- 确认 `api_key` 已正确配置
+- 检查 `base_url` 和 `model` 配置是否正确
+- 查看服务器日志中的错误信息
+
+### 7. AI批改超时
+
+**问题**：AI批改时出现超时错误
+
+**解决**：
+- 增加 `timeout` 配置值（默认30秒）
+- 检查网络连接
+- 检查API服务是否正常
+- 尝试使用其他AI模型
+
+### 8. AI批改结果不准确
+
+**问题**：AI批改的分数或评语不合理
+
+**解决**：
+- 检查题目的标准答案是否清晰
+- 尝试使用更强大的AI模型
+- 考虑使用人工批改进行复核
+- 调整题目描述使其更明确
+
 ## 📝 更新日志
+
+### v1.1.0 (2025-12-12)
+- ✅ 新增简答题AI批改功能
+- ✅ 支持OpenAI、DeepSeek等AI服务
+- ✅ AI配置状态自动检测
+- ✅ 批改方式可选（人工/AI）
+- ✅ AI批改超时处理和重试机制
+- ✅ 优化教师控制面板布局
 
 ### v1.0.0 (2025-08-28)
 - ✅ 初始版本发布
@@ -521,7 +638,7 @@ MAX_IMG_SIZE = 2 * 1024 * 1024  # 2MB
 - ✅ 测试设置和预设功能
 - ✅ 学生自选测试内容功能
 - ✅ 测试统计功能
-- ✅ 简答题批改功能
+- ✅ 简答题人工批改功能
 - ✅ 图片上传功能
 
 ## 📧 联系方式

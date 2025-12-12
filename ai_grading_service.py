@@ -23,7 +23,7 @@ class AIGradingService:
         self.enabled, self.config_message = self._check_config()
     
     def _check_config(self) -> Tuple[bool, str]:
-        """检查AI配置是否完整"""
+        """检查AI配置是否完整（仅检查配置项，不测试连接）"""
         # 检查是否启用
         if not self.config.get('enabled', False):
             return False, "AI批改功能未启用"
@@ -54,6 +54,53 @@ class AIGradingService:
                 return False, f"{provider}提供商需要配置base_url"
         
         return True, "配置正确"
+    
+    def test_connection(self) -> Tuple[bool, str]:
+        """测试API连接是否有效"""
+        if not self.enabled:
+            return False, self.config_message
+        
+        try:
+            # 发送一个简单的测试请求
+            test_prompt = "请回复'OK'"
+            provider = self.config.get('provider', 'openai').lower()
+            
+            # 构建测试请求
+            if provider == 'openai':
+                url = self.config.get('base_url', 'https://api.openai.com/v1') + '/chat/completions'
+                headers = {
+                    'Authorization': f'Bearer {self.config["api_key"]}',
+                    'Content-Type': 'application/json'
+                }
+                data = {
+                    'model': self.config.get('model', 'gpt-3.5-turbo'),
+                    'messages': [{'role': 'user', 'content': test_prompt}],
+                    'max_tokens': 10
+                }
+            else:
+                # 其他提供商暂时跳过实际测试
+                return True, "配置正确（未测试连接）"
+            
+            # 发送请求，设置较短的超时时间
+            response = requests.post(url, headers=headers, json=data, timeout=10)
+            
+            if response.status_code == 200:
+                return True, "API连接测试成功"
+            elif response.status_code == 401:
+                return False, "API密钥无效或已过期"
+            elif response.status_code == 403:
+                return False, "API密钥无权限访问"
+            elif response.status_code == 429:
+                return False, "API请求频率超限"
+            else:
+                return False, f"API连接失败 (状态码: {response.status_code})"
+                
+        except requests.exceptions.Timeout:
+            return False, "API连接超时"
+        except requests.exceptions.ConnectionError:
+            return False, "无法连接到API服务器"
+        except Exception as e:
+            return False, f"连接测试失败: {str(e)}"
     
     def is_enabled(self) -> bool:
         """检查AI批改功能是否可用"""

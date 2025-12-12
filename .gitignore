@@ -1,5 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
 venv/
-题库/
-*.txt
+env/
+ENV/
+build/
+dist/
+*.egg-info/
+
+# 数据库
+instance/
+*.db
+*.sqlite
+*.sqlite3
+
+# 配置文件（包含敏感信息）
+config.py
+
+# 日志
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+.kiro/
+*.swp
+*.swo
+*~
+
+# 操作系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 上传文件
+static/uploads/*
+!static/uploads/.gitkeep
+
+# 临时文件
+*.tmp
+*.bak
+*.backup
+
+# 测试
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 题库文件（包含测试数据）
+题库/*.csv
+题库/*.xlsx
+题库/*.xls
+
+# 可执行文件
 *.exe
-_pycache/
+
+# 验证脚本（仅用于本地）
+verify_production.py

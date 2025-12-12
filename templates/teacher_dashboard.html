@@ -232,13 +232,25 @@
                             </div>
                         </div>
 
-                        <!-- AI批改设置 -->
+                        <!-- 总分 -->
+                        <div class="mb-3">
+                            <div class="row align-items-center">
+                                <div class="col-md-2">
+                                    <label for="total_score" class="form-label mb-0">总分</label>
+                                </div>
+                                <div class="col-md-2">
+                                    <input type="number" class="form-control" id="total_score" name="total_score" value="{{ last_test.total_score if last_test else 100 }}" readonly style="width: 80px;">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- AI批改设置和允许学生自选 -->
                         <div class="mb-3" id="aiGradingSection">
                             <div class="row align-items-center">
                                 <div class="col-md-2">
                                     <label class="form-label mb-0">简答题批改</label>
                                 </div>
-                                <div class="col-md-10">
+                                <div class="col-md-5">
                                     <div class="d-flex align-items-center">
                                         <div class="form-check me-3">
                                             <input class="form-check-input" type="radio" name="short_answer_grading_method" id="manual_grading" value="manual" checked>
@@ -246,35 +258,29 @@
                                                 人工批改
                                             </label>
                                         </div>
-                                        <div class="form-check me-3">
+                                        <div class="form-check">
                                             <input class="form-check-input" type="radio" name="short_answer_grading_method" id="ai_grading" value="ai" disabled>
                                             <label class="form-check-label" for="ai_grading" id="ai_grading_label">
                                                 AI批改
                                             </label>
                                         </div>
-                                        <small class="text-muted" id="aiGradingStatus">
+                                        <small class="text-muted ms-2" id="aiGradingStatus" style="display:none;">
                                             <i class="bi bi-exclamation-triangle"></i> AI批改功能未配置
                                         </small>
+                                    </div>
+                                </div>
+                                <div class="col-md-5">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="allow_student_choice" name="allow_student_choice" value="false" {% if last_test and last_test.allow_student_choice %}checked{% endif %}>
+                                        <label class="form-check-label" for="allow_student_choice">
+                                            允许学生自选测试内容
+                                        </label>
                                     </div>
                                 </div>
                             </div>
                         </div>
 
                         <div class="row align-items-center">
-                            <div class="col-md-4 mb-3">
-                                <div class="d-flex align-items-center">
-                                    <label for="total_score" class="form-label mb-0 me-2">总分</label>
-                                    <input type="number" class="form-control" id="total_score" name="total_score" value="{{ last_test.total_score if last_test else 100 }}" readonly style="width: 80px;">
-                                </div>
-                            </div>
-                            <div class="col-md-4 mb-3">
-                                <div class="form-check">
-                                    <input class="form-check-input" type="checkbox" id="allow_student_choice" name="allow_student_choice" value="false" {% if last_test and last_test.allow_student_choice %}checked{% endif %}>
-                                    <label class="form-check-label" for="allow_student_choice">
-                                        允许学生自选测试内容
-                                    </label>
-                                </div>
-                            </div>
                             <div class="col-md-12 mb-3">
                                 <button type="submit" class="btn btn-primary w-100">保存设置</button>
                             </div>
@@ -687,23 +693,16 @@
                         aiLabel.style.opacity = '1';
                         aiLabel.style.color = '';
                         
-                        let statusHtml = '<i class="bi bi-check-circle text-success"></i> AI批改功能已正确配置';
-                        if (data.provider && data.model) {
-                            statusHtml += ` (${data.provider}/${data.model})`;
-                        }
-                        
-                        statusText.innerHTML = statusHtml;
-                        statusText.className = 'text-success';
-                        statusText.title = data.details || '配置正确';
+                        // 不显示状态信息
+                        statusText.style.display = 'none';
                     } else {
                         aiRadio.disabled = true;
                         aiRadio.style.opacity = '0.4';
                         aiLabel.style.opacity = '0.5';
                         aiLabel.style.color = '#6c757d';
                         
-                        statusText.innerHTML = '<i class="bi bi-exclamation-triangle text-muted"></i> AI配置不正确';
-                        statusText.className = 'text-muted';
-                        statusText.title = data.details || 'AI配置不正确';
+                        // 不显示状态信息
+                        statusText.style.display = 'none';
                         
                         // 如果AI不可用，确保选择人工批改
                         document.getElementById('manual_grading').checked = true;
@@ -721,9 +720,8 @@
                     
                     aiRadio.disabled = true;
                     aiRadio.style.opacity = '0.4';
-                    statusText.innerHTML = '<i class="bi bi-exclamation-triangle text-danger"></i> 无法检查AI配置状态';
-                    statusText.className = 'text-danger';
-                    statusText.title = '网络错误或服务不可用';
+                    // 不显示状态信息
+                    statusText.style.display = 'none';
                 });
         }
 
