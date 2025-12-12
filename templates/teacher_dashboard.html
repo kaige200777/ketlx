@@ -232,6 +232,34 @@
                             </div>
                         </div>
 
+                        <!-- AI批改设置 -->
+                        <div class="mb-3" id="aiGradingSection">
+                            <div class="row align-items-center">
+                                <div class="col-md-2">
+                                    <label class="form-label mb-0">简答题批改</label>
+                                </div>
+                                <div class="col-md-10">
+                                    <div class="d-flex align-items-center">
+                                        <div class="form-check me-3">
+                                            <input class="form-check-input" type="radio" name="short_answer_grading_method" id="manual_grading" value="manual" checked>
+                                            <label class="form-check-label" for="manual_grading">
+                                                人工批改
+                                            </label>
+                                        </div>
+                                        <div class="form-check me-3">
+                                            <input class="form-check-input" type="radio" name="short_answer_grading_method" id="ai_grading" value="ai" disabled>
+                                            <label class="form-check-label" for="ai_grading" id="ai_grading_label">
+                                                AI批改
+                                            </label>
+                                        </div>
+                                        <small class="text-muted" id="aiGradingStatus">
+                                            <i class="bi bi-exclamation-triangle"></i> AI批改功能未配置
+                                        </small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="row align-items-center">
                             <div class="col-md-4 mb-3">
                                 <div class="d-flex align-items-center">
@@ -601,6 +629,17 @@
                 });
                 // 设置允许学生自选测试内容选项
                 document.getElementById('allow_student_choice').checked = data.allow_student_choice || false;
+                
+                // 设置AI批改方式
+                const gradingMethod = data.short_answer_grading_method || 'manual';
+                const gradingRadio = document.querySelector(`input[name="short_answer_grading_method"][value="${gradingMethod}"]`);
+                if (gradingRadio && !gradingRadio.disabled) {
+                    gradingRadio.checked = true;
+                } else {
+                    // 如果AI不可用，默认选择人工批改
+                    document.getElementById('manual_grading').checked = true;
+                }
+                
                 calculateTotalScore();
             });
         });
@@ -632,10 +671,67 @@
 
         loadPresets();
 
+        // 检查AI批改配置状态
+        function checkAIGradingStatus() {
+            fetch('/api/ai_grading_status')
+                .then(r => r.json())
+                .then(data => {
+                    const aiRadio = document.getElementById('ai_grading');
+                    const statusText = document.getElementById('aiGradingStatus');
+                    
+                    const aiLabel = document.getElementById('ai_grading_label');
+                    
+                    if (data.enabled) {
+                        aiRadio.disabled = false;
+                        aiRadio.style.opacity = '1';
+                        aiLabel.style.opacity = '1';
+                        aiLabel.style.color = '';
+                        
+                        let statusHtml = '<i class="bi bi-check-circle text-success"></i> AI批改功能已正确配置';
+                        if (data.provider && data.model) {
+                            statusHtml += ` (${data.provider}/${data.model})`;
+                        }
+                        
+                        statusText.innerHTML = statusHtml;
+                        statusText.className = 'text-success';
+                        statusText.title = data.details || '配置正确';
+                    } else {
+                        aiRadio.disabled = true;
+                        aiRadio.style.opacity = '0.4';
+                        aiLabel.style.opacity = '0.5';
+                        aiLabel.style.color = '#6c757d';
+                        
+                        statusText.innerHTML = '<i class="bi bi-exclamation-triangle text-muted"></i> AI配置不正确';
+                        statusText.className = 'text-muted';
+                        statusText.title = data.details || 'AI配置不正确';
+                        
+                        // 如果AI不可用，确保选择人工批改
+                        document.getElementById('manual_grading').checked = true;
+                        
+                        // 显示详细错误信息（可选）
+                        if (data.details) {
+                            console.warn('AI配置问题:', data.details);
+                        }
+                    }
+                })
+                .catch(error => {
+                    console.error('检查AI配置状态失败:', error);
+                    const aiRadio = document.getElementById('ai_grading');
+                    const statusText = document.getElementById('aiGradingStatus');
+                    
+                    aiRadio.disabled = true;
+                    aiRadio.style.opacity = '0.4';
+                    statusText.innerHTML = '<i class="bi bi-exclamation-triangle text-danger"></i> 无法检查AI配置状态';
+                    statusText.className = 'text-danger';
+                    statusText.title = '网络错误或服务不可用';
+                });
+        }
+
         // 初始化
         initCurrentType();  // 先检查URL参数，设置当前题型
         loadBankList();
         calculateTotalScore();
+        checkAIGradingStatus();  // 检查AI配置状态
 
         document.getElementById('testSettingsForm').addEventListener('submit',function(e){
             e.preventDefault(); // 阻止默认表单提交

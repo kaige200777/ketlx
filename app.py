@@ -13,6 +13,12 @@ from collections import defaultdict
 from io import BytesIO
 from werkzeug.utils import secure_filename
 import uuid
+from ai_grading_service import get_ai_grading_service
+import logging
+
+# 配置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # --- 图片上传配置 ---
 # 允许的扩展名
@@ -106,6 +112,9 @@ class Test(db.Model):
     
     # 新增：是否允许学生自选测试内容
     allow_student_choice = db.Column(db.Boolean, default=False)
+    
+    # AI批改配置
+    short_answer_grading_method = db.Column(db.String(20), default='manual')  # 'manual' 或 'ai'
 
 class TestResult(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -157,6 +166,9 @@ class TestPreset(db.Model):
     # 新增：是否允许学生自选测试内容
     allow_student_choice = db.Column(db.Boolean, default=False)
     
+    # AI批改配置
+    short_answer_grading_method = db.Column(db.String(20), default='manual')  # 'manual' 或 'ai'
+    
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 class ShortAnswerSubmission(db.Model):
@@ -168,6 +180,11 @@ class ShortAnswerSubmission(db.Model):
     score = db.Column(db.Integer, nullable=True)
     comment = db.Column(db.Text, nullable=True)
     graded_bool = db.Column(db.Boolean, default=False)
+    # AI批改相关字段
+    grading_method = db.Column(db.String(20), default='manual')  # 'manual' 或 'ai'
+    ai_original_score = db.Column(db.Integer, nullable=True)  # AI原始评分
+    ai_feedback = db.Column(db.Text, nullable=True)  # AI反馈
+    manual_reviewed = db.Column(db.Boolean, default=False)  # 是否经过人工复核
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 def shuffle_options(question):
@@ -643,32 +660,120 @@ def submit_test():
         flash('无法获取测试ID，请重试')
         return redirect(url_for('student_start'))
     
-    result = TestResult(
-        student_id=session['student_id'],
-        student_name=session.get('student_name', ''),
-        class_number=session.get('class_number', ''),
-        test_id=test_id,
-        score=total_score,
-        answers=json.dumps(answers),
-        ip_address=ip_addr
-    )
-    db.session.add(result)
-    db.session.commit()  # 先提交，确保TestResult有数据
-
-    # 现在创建简答题提交记录，此时result.id已经可用
-    for question_id, answer in answers.items():
-        question = Question.query.get(question_id)
-        if question and question.question_type == 'short_answer':
-            # 简答题答案已经包含在 answer 中（可能包含图片标签）
-            sa = ShortAnswerSubmission(
-                result_id=result.id,  # 现在可以使用result.id
-                question_id=question_id,
-                student_answer=answer,  # 直接使用答案内容（包含图片标签）
-                image_path=None  # 图片已嵌入答案中，不再单独存储
-            )
-            db.session.add(sa)
+    # 获取批改方式配置
+    grading_method = 'manual'  # 默认人工批改
+    if selected_preset_id:
+        preset = TestPreset.query.get(selected_preset_id)
+        if preset:
+            grading_method = preset.short_answer_grading_method or 'manual'
+    else:
+        current_test = Test.query.filter_by(is_active=True).first()
+        if current_test:
+            grading_method = current_test.short_answer_grading_method or 'manual'
     
-    db.session.commit()
+    # 准备AI批改服务
+    ai_service = get_ai_grading_service()
+    ai_scores = {}  # 存储AI批改的分数
+    
+    # 先进行AI批改（在数据库事务外）
+    if grading_method == 'ai' and ai_service.is_enabled():
+        for question_id, answer in answers.items():
+            question = Question.query.get(question_id)
+            if question and question.question_type == 'short_answer':
+                try:
+                    # 获取题目分值
+                    question_score = 0
+                    if isinstance(test_config, dict):
+                        question_score = test_config.get('short_answer_score', 0)
+                    else:
+                        question_score = test_config.short_answer_score or 0
+                    
+                    # 如果题目本身有分值设置，优先使用题目分值
+                    if question.score and question.score > 0:
+                        question_score = question.score
+                    
+                    # 调用AI批改服务
+                    success, ai_result = ai_service.grade_answer(
+                        question=question.content,
+                        reference_answer=question.correct_answer,
+                        student_answer=answer,
+                        max_score=question_score
+                    )
+                    
+                    if success:
+                        ai_scores[question_id] = {
+                            'score': ai_result['score'],
+                            'feedback': ai_result['feedback'],
+                            'success': True
+                        }
+                        # 将AI评分加入总分
+                        total_score += ai_result['score']
+                        logger.info(f"AI批改成功 - 题目ID: {question_id}, 得分: {ai_result['score']}")
+                    else:
+                        ai_scores[question_id] = {
+                            'score': 0,
+                            'feedback': f"AI批改失败: {ai_result.get('error_message', '未知错误')}",
+                            'success': False
+                        }
+                        logger.error(f"AI批改失败 - 题目ID: {question_id}, 错误: {ai_result.get('error_message')}")
+                        
+                except Exception as e:
+                    ai_scores[question_id] = {
+                        'score': 0,
+                        'feedback': f"AI批改异常: {str(e)}",
+                        'success': False
+                    }
+                    logger.error(f"AI批改异常 - 题目ID: {question_id}, 异常: {str(e)}")
+    
+    # 使用单个事务保存所有数据
+    try:
+        # 创建测试结果记录
+        result = TestResult(
+            student_id=session['student_id'],
+            student_name=session.get('student_name', ''),
+            class_number=session.get('class_number', ''),
+            test_id=test_id,
+            score=total_score,
+            answers=json.dumps(answers),
+            ip_address=ip_addr
+        )
+        db.session.add(result)
+        db.session.flush()  # 获取result.id但不提交
+        
+        # 创建简答题提交记录
+        for question_id, answer in answers.items():
+            question = Question.query.get(question_id)
+            if question and question.question_type == 'short_answer':
+                sa = ShortAnswerSubmission(
+                    result_id=result.id,
+                    question_id=question_id,
+                    student_answer=answer,
+                    image_path=None,
+                    grading_method=grading_method
+                )
+                
+                # 如果有AI批改结果，使用它
+                if question_id in ai_scores:
+                    ai_result = ai_scores[question_id]
+                    sa.score = ai_result['score']
+                    sa.comment = ai_result['feedback']
+                    sa.graded_bool = True
+                    
+                    if ai_result['success']:
+                        sa.ai_original_score = ai_result['score']
+                        sa.ai_feedback = ai_result['feedback']
+                
+                db.session.add(sa)
+        
+        # 一次性提交所有更改
+        db.session.commit()
+        logger.info(f"测试提交成功 - 学生: {session.get('student_name')}, 总分: {total_score}")
+        
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"数据库保存失败: {str(e)}")
+        flash('提交失败，请重试')
+        return redirect(url_for('test'))
 
     # 统计历史
     all_results = TestResult.query.filter_by(student_id=session['student_id']).all()
@@ -971,6 +1076,18 @@ def test_result(result_id):
                     score = submission.score
                     comment = submission.comment
             
+            # 为简答题添加AI批改相关信息
+            grading_method = None
+            ai_original_score = None
+            ai_feedback = None
+            manual_reviewed = False
+            
+            if question.question_type == 'short_answer' and submission:
+                grading_method = submission.grading_method
+                ai_original_score = submission.ai_original_score
+                ai_feedback = submission.ai_feedback
+                manual_reviewed = submission.manual_reviewed
+            
             questions.append({
                 'id': question.id,
                 'content': question.content,
@@ -984,7 +1101,12 @@ def test_result(result_id):
                 'is_correct': is_correct,
                 'score': score,
                 'comment': comment,
-                'explanation': question.explanation
+                'explanation': question.explanation,
+                # AI批改相关字段
+                'grading_method': grading_method,
+                'ai_original_score': ai_original_score,
+                'ai_feedback': ai_feedback,
+                'manual_reviewed': manual_reviewed
             })
     
     return render_template('test_result.html',
@@ -1030,6 +1152,9 @@ def grade_short_answer_by_result():
             submission.score = score
             submission.comment = comment
             submission.graded_bool = True
+            # 如果是AI批改的题目，标记为已人工复核
+            if submission.grading_method == 'ai':
+                submission.manual_reviewed = True
         
         # 重新计算测试结果的总分
         result = TestResult.query.get(result_id)
@@ -1636,6 +1761,20 @@ def save_test_settings():
         short_answer_bank_id = request.form.get('short_answer_bank')
         
         allow_student_choice = request.form.get('allow_student_choice') == 'true'
+        
+        # 获取AI批改方式设置
+        short_answer_grading_method = request.form.get('short_answer_grading_method', 'manual')
+        # 验证AI批改方式的有效性
+        if short_answer_grading_method not in ['manual', 'ai']:
+            short_answer_grading_method = 'manual'
+        
+        # 如果选择了AI批改但AI服务不可用，强制使用人工批改
+        if short_answer_grading_method == 'ai':
+            ai_service = get_ai_grading_service()
+            if not ai_service.is_enabled():
+                short_answer_grading_method = 'manual'
+                warnings.append('AI批改功能不可用，已自动切换为人工批改')
+        
         # 总是保存为预设，使用测试标题作为预设名
         save_as_preset = True
         preset_name = title
@@ -1759,6 +1898,7 @@ def save_test_settings():
             preset.fill_blank_bank_id = int(fill_blank_bank_id) if fill_blank_bank_id else None
             preset.short_answer_bank_id = int(short_answer_bank_id) if short_answer_bank_id else None
             preset.allow_student_choice = allow_student_choice
+            preset.short_answer_grading_method = short_answer_grading_method
             message = f'预设 "{preset_name}" 更新成功'
         else:
             # 创建新预设
@@ -1779,7 +1919,8 @@ def save_test_settings():
                 true_false_bank_id=int(true_false_bank_id) if true_false_bank_id else None,
                 fill_blank_bank_id=int(fill_blank_bank_id) if fill_blank_bank_id else None,
                 short_answer_bank_id=int(short_answer_bank_id) if short_answer_bank_id else None,
-                allow_student_choice=allow_student_choice
+                allow_student_choice=allow_student_choice,
+                short_answer_grading_method=short_answer_grading_method
             )
             db.session.add(preset)
             message = f'预设 "{preset_name}" 保存成功'
@@ -1808,6 +1949,7 @@ def save_test_settings():
             fill_blank_bank_id=int(fill_blank_bank_id) if fill_blank_bank_id else None,
             short_answer_bank_id=int(short_answer_bank_id) if short_answer_bank_id else None,
             allow_student_choice=allow_student_choice,
+            short_answer_grading_method=short_answer_grading_method,
             is_active=True
         )
         db.session.add(test)
@@ -1886,7 +2028,8 @@ def get_test_preset(preset_id):
             'true_false_bank_id': preset.true_false_bank_id,
             'fill_blank_bank_id': preset.fill_blank_bank_id,
             'short_answer_bank_id': preset.short_answer_bank_id,
-            'allow_student_choice': preset.allow_student_choice
+            'allow_student_choice': preset.allow_student_choice,
+            'short_answer_grading_method': preset.short_answer_grading_method or 'manual'
         }
     })
 
@@ -1962,6 +2105,26 @@ def change_password():
     # flash('密码修改成功')  # 移除成功提示
     return redirect(url_for('teacher_dashboard'))
 
+
+@app.route('/api/ai_grading_status')
+def get_ai_grading_status():
+    """获取AI批改功能状态"""
+    ai_service = get_ai_grading_service()
+    enabled, config_message = ai_service.get_config_status()
+    
+    if enabled:
+        return jsonify({
+            'enabled': True,
+            'message': 'AI批改功能已正确配置',
+            'details': config_message
+        })
+    else:
+        return jsonify({
+            'enabled': False,
+            'message': 'AI配置不正确',
+            'details': config_message,
+            'suggestion': '请检查config.py中的AI_GRADING_CONFIG配置'
+        })
 
 @app.route('/logout')
 def logout():
