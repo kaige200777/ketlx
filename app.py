@@ -557,8 +557,15 @@ def submit_test():
                 total_score += score or 0
         elif question.question_type == 'fill_blank':
             # 处理填空题多个答案
-            correct_fill_ins = [f.strip().lower() for f in question.correct_answer.split('、') if f.strip()]
-            student_fill_ins = [f.strip().lower() for f in answer.split('、') if f.strip()]
+            # 统一处理分隔符：支持顿号（、）和逗号（,）
+            def split_fill_answers(text):
+                """分割答案，支持顿号和逗号"""
+                # 先统一替换为顿号
+                text = text.replace(',', '、')
+                return [f.strip().lower() for f in text.split('、') if f.strip()]
+            
+            correct_fill_ins = split_fill_answers(question.correct_answer)
+            student_fill_ins = split_fill_answers(answer)
             num_fill_ins = len(correct_fill_ins)
             
             if num_fill_ins > 0:
@@ -1060,11 +1067,32 @@ def test_result(result_id):
                 is_correct = answer == question.correct_answer
                 score = test.true_false_score if is_correct else 0
             elif question.question_type == 'fill_blank':
-                def norm_fill(s):
-                    parts = [p.strip().lower() for p in s.replace('、', ',').split(',') if p.strip()]
-                    return ','.join(parts)
-                is_correct = norm_fill(answer) == norm_fill(question.correct_answer)
-                score = test.fill_blank_score if is_correct else 0
+                # 处理填空题多个答案，按每个空格计分
+                # 统一处理分隔符：支持顿号（、）和逗号（,）
+                def split_answers(text):
+                    """分割答案，支持顿号和逗号"""
+                    # 先统一替换为顿号
+                    text = text.replace(',', '、')
+                    return [f.strip().lower() for f in text.split('、') if f.strip()]
+                
+                correct_fill_ins = split_answers(question.correct_answer)
+                student_fill_ins = split_answers(answer)
+                num_fill_ins = len(correct_fill_ins)
+                
+                if num_fill_ins > 0:
+                    score_per_fill_in = round(test.fill_blank_score / num_fill_ins, 1)
+                    score = 0
+                    
+                    # 比较每个填空
+                    for i in range(min(len(student_fill_ins), num_fill_ins)):
+                        if student_fill_ins[i] == correct_fill_ins[i]:
+                            score += score_per_fill_in
+                    
+                    # 判断是否全对
+                    is_correct = (score == test.fill_blank_score)
+                else:
+                    score = 0
+                    is_correct = False
             elif question.question_type == 'short_answer':
                 # 简答题不判断对错，保持is_correct为None
                 # 从ShortAnswerSubmission表中获取评分和评语
@@ -1494,6 +1522,99 @@ def delete_bank(bank_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'message': f'删除失败: {str(e)}'}), 500
+
+
+@app.route('/export_bank/<int:bank_id>')
+def export_bank(bank_id):
+    """导出题库为Excel文件"""
+    if 'role' not in session or session['role'] != 'teacher':
+        return redirect(url_for('teacher_login'))
+    
+    try:
+        # 获取题库信息
+        bank = QuestionBank.query.get_or_404(bank_id)
+        questions = Question.query.filter_by(bank_id=bank_id).order_by(Question.id).all()
+        
+        if not questions:
+            flash('题库为空，无法导出', 'warning')
+            return redirect(url_for('teacher_bank', bank_id=bank_id))
+        
+        # 根据题型准备数据
+        question_type = bank.question_type
+        data = []
+        
+        if question_type in ['single_choice', 'multiple_choice']:
+            # 选择题格式
+            for q in questions:
+                data.append({
+                    '题目': q.content,
+                    '选项A': q.option_a or '',
+                    '选项B': q.option_b or '',
+                    '选项C': q.option_c or '',
+                    '选项D': q.option_d or '',
+                    '正确答案': q.correct_answer,
+                    '分值': q.score,
+                    '解析': q.explanation or ''
+                })
+        elif question_type == 'true_false':
+            # 判断题格式
+            for q in questions:
+                data.append({
+                    '题目': q.content,
+                    '正确答案': q.correct_answer,
+                    '分值': q.score,
+                    '解析': q.explanation or ''
+                })
+        elif question_type == 'fill_blank':
+            # 填空题格式
+            for q in questions:
+                data.append({
+                    '题目': q.content,
+                    '正确答案': q.correct_answer,
+                    '分值': q.score,
+                    '解析': q.explanation or ''
+                })
+        elif question_type == 'short_answer':
+            # 简答题格式
+            for q in questions:
+                data.append({
+                    '题目': q.content,
+                    '参考答案': q.correct_answer or '',
+                    '分值': q.score,
+                    '解析': q.explanation or ''
+                })
+        
+        # 创建DataFrame
+        df = pd.DataFrame(data)
+        
+        # 创建Excel文件到内存
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='题库')
+        output.seek(0)
+        
+        # 生成文件名
+        type_names = {
+            'single_choice': '单选题',
+            'multiple_choice': '多选题',
+            'true_false': '判断题',
+            'fill_blank': '填空题',
+            'short_answer': '简答题'
+        }
+        type_name = type_names.get(question_type, question_type)
+        filename = f"{bank.name}_{type_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        
+        return send_file(
+            output,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            download_name=filename
+        )
+        
+    except Exception as e:
+        logger.error(f"导出题库失败: {str(e)}")
+        flash(f'导出失败: {str(e)}', 'danger')
+        return redirect(url_for('teacher_bank', bank_id=bank_id))
 
 
 @app.route('/api/upload_image', methods=['POST'])

@@ -98,6 +98,10 @@
                             <span class="badge {% if question.score is not none %}bg-success{% else %}bg-danger{% endif %}">
                                 {% if question.score is not none %}已评分{% else %}待评分{% endif %}
                             </span>
+                            {% elif question.question_type == 'fill_blank' %}
+                            <span class="badge {% if question.is_correct %}bg-success{% elif question.score > 0 %}bg-warning{% else %}bg-danger{% endif %}">
+                                得分：{{ question.score }}分
+                            </span>
                             {% else %}
                             <span class="badge {% if question.is_correct %}bg-success{% else %}bg-danger{% endif %}">
                                 {% if question.is_correct %}对{% else %}错{% endif %}
@@ -139,6 +143,19 @@
                         <div class="mb-3">
                             <div><strong>你的答案：</strong><div class="answer-content">{{ question.student_answer|safe }}</div></div>
                             <div class="mt-2"><strong>正确答案：</strong>{{ question.correct_answer[:-1] if question.correct_answer.endswith('、') else question.correct_answer }}</div>
+                            <div class="mt-2">
+                                <strong>得分：</strong>
+                                <span class="{% if question.is_correct %}text-success{% elif question.score > 0 %}text-warning{% else %}text-danger{% endif %}">
+                                    {{ question.score }}分
+                                </span>
+                                {% if question.is_correct %}
+                                <span class="badge bg-success ms-2">全对</span>
+                                {% elif question.score > 0 %}
+                                <span class="badge bg-warning ms-2">部分正确</span>
+                                {% else %}
+                                <span class="badge bg-danger ms-2">全错</span>
+                                {% endif %}
+                            </div>
                         </div>
                         {% elif question.question_type == 'short_answer' %}
                         <div class="mb-3">
