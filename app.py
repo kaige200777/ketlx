@@ -115,6 +115,7 @@ class Test(db.Model):
     
     # AI批改配置
     short_answer_grading_method = db.Column(db.String(20), default='manual')  # 'manual' 或 'ai'
+    fill_blank_grading_method = db.Column(db.String(20), default='manual')  # 'manual' 或 'ai'
 
 class TestResult(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -168,6 +169,7 @@ class TestPreset(db.Model):
     
     # AI批改配置
     short_answer_grading_method = db.Column(db.String(20), default='manual')  # 'manual' 或 'ai'
+    fill_blank_grading_method = db.Column(db.String(20), default='manual')  # 'manual' 或 'ai'
     
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -177,6 +179,21 @@ class ShortAnswerSubmission(db.Model):
     question_id = db.Column(db.Integer, db.ForeignKey('question.id'), nullable=False)
     student_answer = db.Column(db.Text, nullable=False)
     image_path = db.Column(db.String(200))
+    score = db.Column(db.Integer, nullable=True)
+    comment = db.Column(db.Text, nullable=True)
+    graded_bool = db.Column(db.Boolean, default=False)
+    # AI批改相关字段
+    grading_method = db.Column(db.String(20), default='manual')  # 'manual' 或 'ai'
+    ai_original_score = db.Column(db.Integer, nullable=True)  # AI原始评分
+    ai_feedback = db.Column(db.Text, nullable=True)  # AI反馈
+    manual_reviewed = db.Column(db.Boolean, default=False)  # 是否经过人工复核
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class FillBlankSubmission(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    result_id = db.Column(db.Integer, db.ForeignKey('test_result.id'), nullable=False)
+    question_id = db.Column(db.Integer, db.ForeignKey('question.id'), nullable=False)
+    student_answer = db.Column(db.Text, nullable=False)
     score = db.Column(db.Integer, nullable=True)
     comment = db.Column(db.Text, nullable=True)
     graded_bool = db.Column(db.Boolean, default=False)
@@ -668,32 +685,48 @@ def submit_test():
         return redirect(url_for('student_start'))
     
     # 获取批改方式配置
-    grading_method = 'manual'  # 默认人工批改
+    short_answer_grading_method = 'manual'  # 默认人工批改
+    fill_blank_grading_method = 'manual'  # 默认人工批改
     if selected_preset_id:
         preset = TestPreset.query.get(selected_preset_id)
         if preset:
-            grading_method = preset.short_answer_grading_method or 'manual'
+            short_answer_grading_method = preset.short_answer_grading_method or 'manual'
+            fill_blank_grading_method = preset.fill_blank_grading_method or 'manual'
     else:
         current_test = Test.query.filter_by(is_active=True).first()
         if current_test:
-            grading_method = current_test.short_answer_grading_method or 'manual'
+            short_answer_grading_method = current_test.short_answer_grading_method or 'manual'
+            fill_blank_grading_method = current_test.fill_blank_grading_method or 'manual'
     
     # 准备AI批改服务
     ai_service = get_ai_grading_service()
     ai_scores = {}  # 存储AI批改的分数
     
     # 先进行AI批改（在数据库事务外）
-    if grading_method == 'ai' and ai_service.is_enabled():
+    if ai_service.is_enabled():
         for question_id, answer in answers.items():
             question = Question.query.get(question_id)
-            if question and question.question_type == 'short_answer':
+            # 检查是否需要AI批改
+            should_ai_grade = False
+            if question.question_type == 'short_answer' and short_answer_grading_method == 'ai':
+                should_ai_grade = True
+            elif question.question_type == 'fill_blank' and fill_blank_grading_method == 'ai':
+                should_ai_grade = True
+            
+            if question and should_ai_grade:
                 try:
                     # 获取题目分值
                     question_score = 0
-                    if isinstance(test_config, dict):
-                        question_score = test_config.get('short_answer_score', 0)
-                    else:
-                        question_score = test_config.short_answer_score or 0
+                    if question.question_type == 'short_answer':
+                        if isinstance(test_config, dict):
+                            question_score = test_config.get('short_answer_score', 0)
+                        else:
+                            question_score = test_config.short_answer_score or 0
+                    elif question.question_type == 'fill_blank':
+                        if isinstance(test_config, dict):
+                            question_score = test_config.get('fill_blank_score', 0)
+                        else:
+                            question_score = test_config.fill_blank_score or 0
                     
                     # 如果题目本身有分值设置，优先使用题目分值
                     if question.score and question.score > 0:
@@ -704,7 +737,8 @@ def submit_test():
                         question=question.content,
                         reference_answer=question.correct_answer,
                         student_answer=answer,
-                        max_score=question_score
+                        max_score=question_score,
+                        question_type=question.question_type
                     )
                     
                     if success:
@@ -747,7 +781,7 @@ def submit_test():
         db.session.add(result)
         db.session.flush()  # 获取result.id但不提交
         
-        # 创建简答题提交记录
+        # 创建简答题和填空题提交记录
         for question_id, answer in answers.items():
             question = Question.query.get(question_id)
             if question and question.question_type == 'short_answer':
@@ -756,7 +790,7 @@ def submit_test():
                     question_id=question_id,
                     student_answer=answer,
                     image_path=None,
-                    grading_method=grading_method
+                    grading_method=short_answer_grading_method
                 )
                 
                 # 如果有AI批改结果，使用它
@@ -771,6 +805,54 @@ def submit_test():
                         sa.ai_feedback = ai_result['feedback']
                 
                 db.session.add(sa)
+            elif question and question.question_type == 'fill_blank':
+                fb = FillBlankSubmission(
+                    result_id=result.id,
+                    question_id=question_id,
+                    student_answer=answer,
+                    grading_method=fill_blank_grading_method
+                )
+                
+                # 如果有AI批改结果，使用它
+                if question_id in ai_scores:
+                    ai_result = ai_scores[question_id]
+                    fb.score = ai_result['score']
+                    fb.comment = ai_result['feedback']
+                    fb.graded_bool = True
+                    
+                    if ai_result['success']:
+                        fb.ai_original_score = ai_result['score']
+                        fb.ai_feedback = ai_result['feedback']
+                else:
+                    # 如果没有AI批改，使用传统的填空题评分逻辑
+                    # 这里需要计算填空题的分数
+                    def split_fill_answers(text):
+                        """分割答案，支持顿号和逗号"""
+                        text = text.replace(',', '、')
+                        return [f.strip().lower() for f in text.split('、') if f.strip()]
+                    
+                    correct_fill_ins = split_fill_answers(question.correct_answer)
+                    student_fill_ins = split_fill_answers(answer)
+                    num_fill_ins = len(correct_fill_ins)
+                    
+                    if num_fill_ins > 0:
+                        if isinstance(test_config, dict):
+                            total_fill_score = test_config.get('fill_blank_score', 0)
+                        else:
+                            total_fill_score = test_config.fill_blank_score or 0
+                        
+                        score_per_fill_in = round((total_fill_score or 0) / num_fill_ins, 1)
+                        fill_blank_score = 0
+                        
+                        # 比较每个填空
+                        for i in range(min(len(student_fill_ins), num_fill_ins)):
+                            if student_fill_ins[i] == correct_fill_ins[i]:
+                                fill_blank_score += score_per_fill_in
+                        
+                        fb.score = int(fill_blank_score)
+                        fb.graded_bool = True
+                
+                db.session.add(fb)
         
         # 一次性提交所有更改
         db.session.commit()
@@ -1067,32 +1149,44 @@ def test_result(result_id):
                 is_correct = answer == question.correct_answer
                 score = test.true_false_score if is_correct else 0
             elif question.question_type == 'fill_blank':
-                # 处理填空题多个答案，按每个空格计分
-                # 统一处理分隔符：支持顿号（、）和逗号（,）
-                def split_answers(text):
-                    """分割答案，支持顿号和逗号"""
-                    # 先统一替换为顿号
-                    text = text.replace(',', '、')
-                    return [f.strip().lower() for f in text.split('、') if f.strip()]
+                # 首先尝试从FillBlankSubmission表中获取评分信息
+                fill_blank_submission = FillBlankSubmission.query.filter_by(
+                    result_id=result.id,
+                    question_id=question.id
+                ).first()
                 
-                correct_fill_ins = split_answers(question.correct_answer)
-                student_fill_ins = split_answers(answer)
-                num_fill_ins = len(correct_fill_ins)
-                
-                if num_fill_ins > 0:
-                    score_per_fill_in = round(test.fill_blank_score / num_fill_ins, 1)
-                    score = 0
-                    
-                    # 比较每个填空
-                    for i in range(min(len(student_fill_ins), num_fill_ins)):
-                        if student_fill_ins[i] == correct_fill_ins[i]:
-                            score += score_per_fill_in
-                    
-                    # 判断是否全对
+                if fill_blank_submission:
+                    # 如果有提交记录，使用记录中的分数
+                    score = fill_blank_submission.score or 0
+                    comment = fill_blank_submission.comment
                     is_correct = (score == test.fill_blank_score)
                 else:
-                    score = 0
-                    is_correct = False
+                    # 如果没有提交记录，使用传统的填空题评分逻辑
+                    # 统一处理分隔符：支持顿号（、）和逗号（,）
+                    def split_answers(text):
+                        """分割答案，支持顿号和逗号"""
+                        # 先统一替换为顿号
+                        text = text.replace(',', '、')
+                        return [f.strip().lower() for f in text.split('、') if f.strip()]
+                    
+                    correct_fill_ins = split_answers(question.correct_answer)
+                    student_fill_ins = split_answers(answer)
+                    num_fill_ins = len(correct_fill_ins)
+                    
+                    if num_fill_ins > 0:
+                        score_per_fill_in = round(test.fill_blank_score / num_fill_ins, 1)
+                        score = 0
+                        
+                        # 比较每个填空
+                        for i in range(min(len(student_fill_ins), num_fill_ins)):
+                            if student_fill_ins[i] == correct_fill_ins[i]:
+                                score += score_per_fill_in
+                        
+                        # 判断是否全对
+                        is_correct = (score == test.fill_blank_score)
+                    else:
+                        score = 0
+                        is_correct = False
             elif question.question_type == 'short_answer':
                 # 简答题不判断对错，保持is_correct为None
                 # 从ShortAnswerSubmission表中获取评分和评语
@@ -1104,7 +1198,7 @@ def test_result(result_id):
                     score = submission.score
                     comment = submission.comment
             
-            # 为简答题添加AI批改相关信息
+            # 为简答题和填空题添加AI批改相关信息
             grading_method = None
             ai_original_score = None
             ai_feedback = None
@@ -1115,6 +1209,11 @@ def test_result(result_id):
                 ai_original_score = submission.ai_original_score
                 ai_feedback = submission.ai_feedback
                 manual_reviewed = submission.manual_reviewed
+            elif question.question_type == 'fill_blank' and fill_blank_submission:
+                grading_method = fill_blank_submission.grading_method
+                ai_original_score = fill_blank_submission.ai_original_score
+                ai_feedback = fill_blank_submission.ai_feedback
+                manual_reviewed = fill_blank_submission.manual_reviewed
             
             questions.append({
                 'id': question.id,
@@ -1245,6 +1344,117 @@ def grade_short_answer_by_result():
             db.session.commit()
         
         # flash('评分成功')  # 移除成功提示
+    except Exception as e:
+        db.session.rollback()
+        flash(f'评分失败：{str(e)}')
+    
+    return redirect(url_for('test_result', result_id=result_id))
+
+@app.route('/grade_fill_blank/<int:question_id>/<int:result_id>', methods=['POST'])
+def grade_fill_blank(question_id, result_id):
+    """填空题评分路由"""
+    if 'role' not in session or session['role'] != 'teacher':
+        flash('未授权')
+        return redirect(url_for('teacher_login'))
+    
+    score = int(request.form.get('score'))
+    comment = request.form.get('comment')
+    
+    try:
+        # 更新填空题评分
+        submission = FillBlankSubmission.query.filter_by(
+            result_id=result_id,
+            question_id=question_id
+        ).first()
+        
+        if not submission:
+            # 如果没有找到记录，创建一个新的
+            submission = FillBlankSubmission(
+                result_id=result_id,
+                question_id=question_id,
+                student_answer='',  # 这里不需要学生答案，因为已经在answers字段中
+                score=score,
+                comment=comment,
+                graded_bool=True
+            )
+            db.session.add(submission)
+        else:
+            submission.score = score
+            submission.comment = comment
+            submission.graded_bool = True
+            # 如果是AI批改的题目，标记为已人工复核
+            if submission.grading_method == 'ai':
+                submission.manual_reviewed = True
+        
+        # 重新计算测试结果的总分
+        result = TestResult.query.get(result_id)
+        test = Test.query.get(result.test_id)
+        answers = json.loads(result.answers)
+        
+        total_score = 0
+        for qid_str, answer in answers.items():
+            qid = int(qid_str)
+            question = Question.query.get(qid)
+            if not question:
+                continue
+            
+            if question.question_type == 'single_choice':
+                if answer == question.correct_answer:
+                    total_score += test.single_choice_score
+            elif question.question_type == 'multiple_choice':
+                def normalize(ans):
+                    return ''.join(sorted([c for c in ans.replace(',', '').replace(' ', '').upper() if c in 'ABCDE']))
+                if normalize(answer) == normalize(question.correct_answer):
+                    total_score += test.multiple_choice_score
+            elif question.question_type == 'true_false':
+                if answer == question.correct_answer:
+                    total_score += test.true_false_score
+            elif question.question_type == 'fill_blank':
+                # 从FillBlankSubmission表中获取评分
+                fb_submission = FillBlankSubmission.query.filter_by(
+                    result_id=result_id,
+                    question_id=qid
+                ).first()
+                if fb_submission and fb_submission.score is not None:
+                    total_score += fb_submission.score
+                else:
+                    # 如果没有提交记录，使用传统评分
+                    def norm_fill(s):
+                        parts = [p.strip().lower() for p in s.replace('、', ',').split(',') if p.strip()]
+                        return ','.join(parts)
+                    if norm_fill(answer) == norm_fill(question.correct_answer):
+                        total_score += test.fill_blank_score
+            elif question.question_type == 'short_answer':
+                # 从ShortAnswerSubmission表中获取评分
+                sa_submission = ShortAnswerSubmission.query.filter_by(
+                    result_id=result_id,
+                    question_id=qid
+                ).first()
+                if sa_submission and sa_submission.score is not None:
+                    total_score += sa_submission.score
+        
+        # 更新测试结果的总分
+        result.score = total_score
+        db.session.commit()
+        
+        # 更新学生历史记录
+        student_id = result.student_id
+        all_results = TestResult.query.filter_by(student_id=student_id).all()
+        test_count = len(all_results)
+        total_score_sum = sum(r.score for r in all_results)
+        average_score = total_score_sum / test_count if test_count > 0 else 0
+        highest_score = max((r.score for r in all_results), default=0)
+        lowest_score = min((r.score for r in all_results), default=0)
+        
+        history = StudentTestHistory.query.filter_by(student_id=student_id).first()
+        if history:
+            history.test_count = test_count
+            history.total_score = total_score_sum
+            history.average_score = average_score
+            history.highest_score = highest_score
+            history.lowest_score = lowest_score
+            db.session.commit()
+        
     except Exception as e:
         db.session.rollback()
         flash(f'评分失败：{str(e)}')
@@ -1885,16 +2095,22 @@ def save_test_settings():
         
         # 获取AI批改方式设置
         short_answer_grading_method = request.form.get('short_answer_grading_method', 'manual')
+        fill_blank_grading_method = request.form.get('fill_blank_grading_method', 'manual')
+        
         # 验证AI批改方式的有效性
         if short_answer_grading_method not in ['manual', 'ai']:
             short_answer_grading_method = 'manual'
+        if fill_blank_grading_method not in ['manual', 'ai']:
+            fill_blank_grading_method = 'manual'
         
         # 如果选择了AI批改但AI服务不可用，强制使用人工批改
-        if short_answer_grading_method == 'ai':
-            ai_service = get_ai_grading_service()
-            if not ai_service.is_enabled():
-                short_answer_grading_method = 'manual'
-                warnings.append('AI批改功能不可用，已自动切换为人工批改')
+        ai_service = get_ai_grading_service()
+        if short_answer_grading_method == 'ai' and not ai_service.is_enabled():
+            short_answer_grading_method = 'manual'
+            warnings.append('简答题AI批改功能不可用，已自动切换为人工批改')
+        if fill_blank_grading_method == 'ai' and not ai_service.is_enabled():
+            fill_blank_grading_method = 'manual'
+            warnings.append('填空题AI批改功能不可用，已自动切换为人工批改')
         
         # 总是保存为预设，使用测试标题作为预设名
         save_as_preset = True
@@ -2020,6 +2236,7 @@ def save_test_settings():
             preset.short_answer_bank_id = int(short_answer_bank_id) if short_answer_bank_id else None
             preset.allow_student_choice = allow_student_choice
             preset.short_answer_grading_method = short_answer_grading_method
+            preset.fill_blank_grading_method = fill_blank_grading_method
             message = f'预设 "{preset_name}" 更新成功'
         else:
             # 创建新预设
@@ -2041,7 +2258,8 @@ def save_test_settings():
                 fill_blank_bank_id=int(fill_blank_bank_id) if fill_blank_bank_id else None,
                 short_answer_bank_id=int(short_answer_bank_id) if short_answer_bank_id else None,
                 allow_student_choice=allow_student_choice,
-                short_answer_grading_method=short_answer_grading_method
+                short_answer_grading_method=short_answer_grading_method,
+                fill_blank_grading_method=fill_blank_grading_method
             )
             db.session.add(preset)
             message = f'预设 "{preset_name}" 保存成功'
@@ -2071,6 +2289,7 @@ def save_test_settings():
             short_answer_bank_id=int(short_answer_bank_id) if short_answer_bank_id else None,
             allow_student_choice=allow_student_choice,
             short_answer_grading_method=short_answer_grading_method,
+            fill_blank_grading_method=fill_blank_grading_method,
             is_active=True
         )
         db.session.add(test)
@@ -2150,7 +2369,8 @@ def get_test_preset(preset_id):
             'fill_blank_bank_id': preset.fill_blank_bank_id,
             'short_answer_bank_id': preset.short_answer_bank_id,
             'allow_student_choice': preset.allow_student_choice,
-            'short_answer_grading_method': preset.short_answer_grading_method or 'manual'
+            'short_answer_grading_method': preset.short_answer_grading_method or 'manual',
+            'fill_blank_grading_method': preset.fill_blank_grading_method or 'manual'
         }
     })
 

@@ -111,7 +111,7 @@ class AIGradingService:
         return self.enabled, self.config_message
     
     def grade_answer(self, question: str, reference_answer: str, 
-                    student_answer: str, max_score: int) -> Tuple[bool, Dict]:
+                    student_answer: str, max_score: int, question_type: str = 'short_answer') -> Tuple[bool, Dict]:
         """
         批改学生答案
         
@@ -120,6 +120,7 @@ class AIGradingService:
             reference_answer: 参考答案
             student_answer: 学生答案
             max_score: 题目满分
+            question_type: 题目类型 ('short_answer' 或 'fill_blank')
             
         Returns:
             Tuple[bool, Dict]: (是否成功, 结果字典)
@@ -129,26 +130,105 @@ class AIGradingService:
             return False, {"error_message": "AI批改功能未启用"}
         
         try:
-            # 构建请求消息
-            user_prompt = self.prompts['user_prompt_template'].format(
-                question=question,
-                reference_answer=reference_answer or "无参考答案",
-                max_score=max_score,
-                student_answer=student_answer
-            )
-            
-            # 根据不同的API提供商构建请求
-            success, result = self._make_api_request(user_prompt)
-            
-            if not success:
-                return False, result
-            
-            # 解析AI返回的结果
-            return self._parse_ai_response(result, max_score)
+            # 根据题目类型选择不同的批改策略
+            if question_type == 'fill_blank':
+                return self._grade_fill_blank(question, reference_answer, student_answer, max_score)
+            else:
+                return self._grade_short_answer(question, reference_answer, student_answer, max_score)
             
         except Exception as e:
             logger.error(f"AI批改过程中发生错误: {str(e)}")
             return False, {"error_message": f"批改失败: {str(e)}"}
+    
+    def _grade_short_answer(self, question: str, reference_answer: str, 
+                           student_answer: str, max_score: int) -> Tuple[bool, Dict]:
+        """批改简答题"""
+        # 构建请求消息
+        user_prompt = self.prompts['user_prompt_template'].format(
+            question=question,
+            reference_answer=reference_answer or "无参考答案",
+            max_score=max_score,
+            student_answer=student_answer
+        )
+        
+        # 根据不同的API提供商构建请求
+        success, result = self._make_api_request(user_prompt)
+        
+        if not success:
+            return False, result
+        
+        # 解析AI返回的结果
+        return self._parse_ai_response(result, max_score)
+    
+    def _grade_fill_blank(self, question: str, reference_answer: str, 
+                         student_answer: str, max_score: int) -> Tuple[bool, Dict]:
+        """批改填空题"""
+        # 预处理答案，统一分隔符
+        def normalize_answers(text):
+            """标准化答案格式"""
+            if not text:
+                return []
+            # 统一分隔符为顿号
+            text = text.replace(',', '、').replace('，', '、')
+            return [item.strip() for item in text.split('、') if item.strip()]
+        
+        reference_items = normalize_answers(reference_answer)
+        student_items = normalize_answers(student_answer)
+        
+        # 构建填空题专用的提示词
+        fill_blank_prompt = f"""你是一位专业的教师，负责批改学生的填空题答案。请根据以下要求进行评分：
+
+题目分析：
+题目：{question}
+参考答案：{reference_answer}（共{len(reference_items)}个填空）
+学生答案：{student_answer}（共{len(student_items)}个填空）
+题目分值：{max_score}分
+
+评分原则：
+1. **顺序判断**：根据题目内容判断是否需要按特定顺序填写
+   - 时间顺序（如历史事件、发展过程）：必须按顺序
+   - 步骤顺序（如操作流程、计算步骤）：必须按顺序
+   - 逻辑顺序（如因果关系、递进关系）：必须按顺序
+   - 并列关系（如特征列举、要素罗列）：不要求顺序
+   - 分类描述（如类型、属性）：不要求顺序
+
+2. **语义匹配**：
+   - 接受合理的同义词（如"电脑"与"计算机"）
+   - 接受标准缩写（如"CPU"与"中央处理器"）
+   - 接受不同表达方式（如"增加"与"提高"）
+   - 忽略大小写差异
+   - 忽略标点符号差异
+
+3. **评分策略**：
+   - 每个填空平均分配分数：{max_score}/{len(reference_items) if reference_items else 1} = {round(max_score/len(reference_items), 1) if reference_items else max_score}分/空
+   - 按正确填空数量比例给分
+   - 部分正确可以给部分分数
+
+4. **容错处理**：
+   - 轻微拼写错误可以接受
+   - 合理的表达变体可以接受
+   - 明显错误或无关内容不给分
+
+请仔细分析题目特点，判断是否需要按顺序，然后进行评分。
+
+请以JSON格式返回结果:
+{{
+    "score": 分数(整数，0-{max_score}),
+    "feedback": "AI评语：[评分理由] 正确填空：[具体说明] 错误或缺失：[具体说明] 改进建议：[具体建议]",
+    "order_required": true/false,
+    "correct_count": 正确填空数量,
+    "total_count": 总填空数量,
+    "analysis": "详细的逐项分析"
+}}"""
+
+        # 发送API请求
+        success, result = self._make_api_request(fill_blank_prompt)
+        
+        if not success:
+            return False, result
+        
+        # 解析AI返回的结果
+        return self._parse_ai_response(result, max_score)
     
     def _make_api_request(self, user_prompt: str) -> Tuple[bool, Dict]:
         """发送API请求"""
@@ -358,10 +438,23 @@ class AIGradingService:
                 if not feedback:
                     feedback = "AI评语：答案已评分，请参考参考答案进行对比学习。"
                 
-                return True, {
+                # 构建返回结果
+                ai_result = {
                     'score': score,
                     'feedback': feedback
                 }
+                
+                # 如果是填空题，添加额外信息
+                if 'order_required' in result:
+                    ai_result['order_required'] = result.get('order_required', False)
+                if 'correct_count' in result:
+                    ai_result['correct_count'] = result.get('correct_count', 0)
+                if 'total_count' in result:
+                    ai_result['total_count'] = result.get('total_count', 0)
+                if 'analysis' in result:
+                    ai_result['analysis'] = result.get('analysis', '')
+                
+                return True, ai_result
                 
             except json.JSONDecodeError:
                 # 如果无法解析JSON，尝试从文本中提取信息

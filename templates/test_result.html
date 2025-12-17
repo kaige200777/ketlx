@@ -155,7 +155,56 @@
                                 {% else %}
                                 <span class="badge bg-danger ms-2">全错</span>
                                 {% endif %}
+                                {% if question.grading_method == 'ai' %}
+                                <span class="badge bg-info ms-2">AI批改</span>
+                                {% elif question.grading_method == 'manual' %}
+                                <span class="badge bg-secondary ms-2">人工批改</span>
+                                {% endif %}
+                                {% if question.manual_reviewed %}
+                                <span class="badge bg-success ms-1">已复核</span>
+                                {% endif %}
                             </div>
+                            
+                            {% if question.comment %}
+                            <div class="mt-2">
+                                <strong>评语：</strong>
+                                <div class="alert alert-light mt-1">{{ question.comment|safe }}</div>
+                            </div>
+                            {% endif %}
+                            
+                            {% if is_teacher %}
+                            <div class="mt-3">
+                                {% if question.grading_method == 'ai' and question.ai_original_score is not none %}
+                                <div class="alert alert-info">
+                                    <small>
+                                        <strong>AI原始评分：</strong>{{ question.ai_original_score }}分<br>
+                                        {% if question.ai_feedback %}
+                                        <strong>AI反馈：</strong>{{ question.ai_feedback|safe }}
+                                        {% endif %}
+                                    </small>
+                                </div>
+                                {% endif %}
+                                
+                                <form method="post" action="{{ url_for('grade_fill_blank', question_id=question.id, result_id=result.id) }}" class="d-inline">
+                                    <div class="mb-2">
+                                        <label for="score-{{ question.id }}" class="form-label">
+                                            {% if question.grading_method == 'ai' %}人工复核评分{% else %}评分{% endif %}
+                                            （0-{{ question.score if question.score is not none else test.fill_blank_score }}分）：
+                                        </label>
+                                        <input type="number" class="form-control" id="score-{{ question.id }}" name="score" min="0" max="{{ test.fill_blank_score }}" value="{{ question.score if question.score is not none else 0 }}" required>
+                                    </div>
+                                    <div class="mb-2">
+                                        <label for="comment-{{ question.id }}" class="form-label">
+                                            {% if question.grading_method == 'ai' %}复核评语{% else %}评语{% endif %}（可选）：
+                                        </label>
+                                        <textarea class="form-control" id="comment-{{ question.id }}" name="comment" rows="2">{{ question.comment if question.comment is not none else '' }}</textarea>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary">
+                                        {% if question.grading_method == 'ai' %}提交复核{% else %}提交评分{% endif %}
+                                    </button>
+                                </form>
+                            </div>
+                            {% endif %}
                         </div>
                         {% elif question.question_type == 'short_answer' %}
                         <div class="mb-3">

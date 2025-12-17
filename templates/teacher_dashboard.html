@@ -244,8 +244,36 @@
                             </div>
                         </div>
 
-                        <!-- AI批改设置和允许学生自选 -->
-                        <div class="mb-3" id="aiGradingSection">
+                        <!-- 填空题批改设置 -->
+                        <div class="mb-3" id="fillBlankGradingSection">
+                            <div class="row align-items-center">
+                                <div class="col-md-2">
+                                    <label class="form-label mb-0">填空题批改</label>
+                                </div>
+                                <div class="col-md-10">
+                                    <div class="d-flex align-items-center">
+                                        <div class="form-check me-3">
+                                            <input class="form-check-input" type="radio" name="fill_blank_grading_method" id="fill_blank_manual_grading" value="manual">
+                                            <label class="form-check-label" for="fill_blank_manual_grading">
+                                                人工批改
+                                            </label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="radio" name="fill_blank_grading_method" id="fill_blank_ai_grading" value="ai" disabled>
+                                            <label class="form-check-label" for="fill_blank_ai_grading" id="fill_blank_ai_grading_label">
+                                                AI批改
+                                            </label>
+                                        </div>
+                                        <small class="text-muted ms-2" id="fillBlankAiGradingStatus" style="display:none;">
+                                            <i class="bi bi-exclamation-triangle"></i> AI批改功能未配置
+                                        </small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 简答题批改设置 -->
+                        <div class="mb-3" id="shortAnswerGradingSection">
                             <div class="row align-items-center">
                                 <div class="col-md-2">
                                     <label class="form-label mb-0">简答题批改</label>
@@ -253,18 +281,18 @@
                                 <div class="col-md-5">
                                     <div class="d-flex align-items-center">
                                         <div class="form-check me-3">
-                                            <input class="form-check-input" type="radio" name="short_answer_grading_method" id="manual_grading" value="manual" checked>
-                                            <label class="form-check-label" for="manual_grading">
+                                            <input class="form-check-input" type="radio" name="short_answer_grading_method" id="short_answer_manual_grading" value="manual">
+                                            <label class="form-check-label" for="short_answer_manual_grading">
                                                 人工批改
                                             </label>
                                         </div>
                                         <div class="form-check">
-                                            <input class="form-check-input" type="radio" name="short_answer_grading_method" id="ai_grading" value="ai" disabled>
-                                            <label class="form-check-label" for="ai_grading" id="ai_grading_label">
+                                            <input class="form-check-input" type="radio" name="short_answer_grading_method" id="short_answer_ai_grading" value="ai" disabled>
+                                            <label class="form-check-label" for="short_answer_ai_grading" id="short_answer_ai_grading_label">
                                                 AI批改
                                             </label>
                                         </div>
-                                        <small class="text-muted ms-2" id="aiGradingStatus" style="display:none;">
+                                        <small class="text-muted ms-2" id="shortAnswerAiGradingStatus" style="display:none;">
                                             <i class="bi bi-exclamation-triangle"></i> AI批改功能未配置
                                         </small>
                                     </div>
@@ -636,14 +664,24 @@
                 // 设置允许学生自选测试内容选项
                 document.getElementById('allow_student_choice').checked = data.allow_student_choice || false;
                 
-                // 设置AI批改方式
-                const gradingMethod = data.short_answer_grading_method || 'manual';
-                const gradingRadio = document.querySelector(`input[name="short_answer_grading_method"][value="${gradingMethod}"]`);
-                if (gradingRadio && !gradingRadio.disabled) {
-                    gradingRadio.checked = true;
+                // 设置填空题AI批改方式
+                const fillBlankGradingMethod = data.fill_blank_grading_method || 'manual';
+                const fillBlankGradingRadio = document.querySelector(`input[name="fill_blank_grading_method"][value="${fillBlankGradingMethod}"]`);
+                if (fillBlankGradingRadio && !fillBlankGradingRadio.disabled) {
+                    fillBlankGradingRadio.checked = true;
                 } else {
                     // 如果AI不可用，默认选择人工批改
-                    document.getElementById('manual_grading').checked = true;
+                    document.getElementById('fill_blank_manual_grading').checked = true;
+                }
+                
+                // 设置简答题AI批改方式
+                const shortAnswerGradingMethod = data.short_answer_grading_method || 'manual';
+                const shortAnswerGradingRadio = document.querySelector(`input[name="short_answer_grading_method"][value="${shortAnswerGradingMethod}"]`);
+                if (shortAnswerGradingRadio && !shortAnswerGradingRadio.disabled) {
+                    shortAnswerGradingRadio.checked = true;
+                } else {
+                    // 如果AI不可用，默认选择人工批改
+                    document.getElementById('short_answer_manual_grading').checked = true;
                 }
                 
                 calculateTotalScore();
@@ -682,30 +720,58 @@
             fetch('/api/ai_grading_status')
                 .then(r => r.json())
                 .then(data => {
-                    const aiRadio = document.getElementById('ai_grading');
-                    const statusText = document.getElementById('aiGradingStatus');
+                    // 处理填空题AI批改设置
+                    const fillBlankAiRadio = document.getElementById('fill_blank_ai_grading');
+                    const fillBlankManualRadio = document.getElementById('fill_blank_manual_grading');
+                    const fillBlankStatusText = document.getElementById('fillBlankAiGradingStatus');
+                    const fillBlankAiLabel = document.getElementById('fill_blank_ai_grading_label');
                     
-                    const aiLabel = document.getElementById('ai_grading_label');
+                    // 处理简答题AI批改设置
+                    const shortAnswerAiRadio = document.getElementById('short_answer_ai_grading');
+                    const shortAnswerManualRadio = document.getElementById('short_answer_manual_grading');
+                    const shortAnswerStatusText = document.getElementById('shortAnswerAiGradingStatus');
+                    const shortAnswerAiLabel = document.getElementById('short_answer_ai_grading_label');
                     
                     if (data.enabled) {
-                        aiRadio.disabled = false;
-                        aiRadio.style.opacity = '1';
-                        aiLabel.style.opacity = '1';
-                        aiLabel.style.color = '';
+                        // 填空题AI批改可用
+                        fillBlankAiRadio.disabled = false;
+                        fillBlankAiRadio.style.opacity = '1';
+                        fillBlankAiLabel.style.opacity = '1';
+                        fillBlankAiLabel.style.color = '';
+                        fillBlankStatusText.style.display = 'none';
+                        // AI配置测试通过，默认选择AI批改
+                        fillBlankAiRadio.checked = true;
+                        fillBlankManualRadio.checked = false;
                         
-                        // 不显示状态信息
-                        statusText.style.display = 'none';
+                        // 简答题AI批改可用
+                        shortAnswerAiRadio.disabled = false;
+                        shortAnswerAiRadio.style.opacity = '1';
+                        shortAnswerAiLabel.style.opacity = '1';
+                        shortAnswerAiLabel.style.color = '';
+                        shortAnswerStatusText.style.display = 'none';
+                        // AI配置测试通过，默认选择AI批改
+                        shortAnswerAiRadio.checked = true;
+                        shortAnswerManualRadio.checked = false;
                     } else {
-                        aiRadio.disabled = true;
-                        aiRadio.style.opacity = '0.4';
-                        aiLabel.style.opacity = '0.5';
-                        aiLabel.style.color = '#6c757d';
+                        // 填空题AI批改不可用
+                        fillBlankAiRadio.disabled = true;
+                        fillBlankAiRadio.style.opacity = '0.4';
+                        fillBlankAiLabel.style.opacity = '0.5';
+                        fillBlankAiLabel.style.color = '#6c757d';
+                        fillBlankStatusText.style.display = 'none';
+                        // 如果AI不可用，默认选择人工批改
+                        fillBlankManualRadio.checked = true;
+                        fillBlankAiRadio.checked = false;
                         
-                        // 不显示状态信息
-                        statusText.style.display = 'none';
-                        
-                        // 如果AI不可用，确保选择人工批改
-                        document.getElementById('manual_grading').checked = true;
+                        // 简答题AI批改不可用
+                        shortAnswerAiRadio.disabled = true;
+                        shortAnswerAiRadio.style.opacity = '0.4';
+                        shortAnswerAiLabel.style.opacity = '0.5';
+                        shortAnswerAiLabel.style.color = '#6c757d';
+                        shortAnswerStatusText.style.display = 'none';
+                        // 如果AI不可用，默认选择人工批改
+                        shortAnswerManualRadio.checked = true;
+                        shortAnswerAiRadio.checked = false;
                         
                         // 显示详细错误信息（可选）
                         if (data.details) {
