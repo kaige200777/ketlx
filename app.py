@@ -513,6 +513,7 @@ def submit_test():
     # 获取所有答案
     answers = {}
     fill_blank_questions_ids = set()  # 记录填空题的ID
+    ai_scores = {}  # 存储AI批改的分数，提前初始化避免UnboundLocalError
     
     for key in request.form:
         if key.startswith('answer_'):
@@ -573,7 +574,12 @@ def submit_test():
                 score = test_config.get('true_false_score') if isinstance(test_config, dict) else test_config.true_false_score
                 total_score += score or 0
         elif question.question_type == 'fill_blank':
-            # 处理填空题多个答案
+            # 检查是否已经通过AI批改计算了分数
+            if question_id in ai_scores:
+                # AI批改的填空题，分数已经在AI批改时计算，跳过传统计算
+                continue
+            
+            # 处理填空题多个答案（仅用于非AI批改的情况）
             # 统一处理分隔符：支持顿号（、）和逗号（,）
             def split_fill_answers(text):
                 """分割答案，支持顿号和逗号"""
@@ -597,6 +603,11 @@ def submit_test():
                 
                 total_score += fill_blank_score
         elif question.question_type == 'short_answer':
+            # 检查是否已经通过AI批改计算了分数
+            if question_id in ai_scores:
+                # AI批改的简答题，分数已经在AI批改时计算，跳过传统计算
+                continue
+                
             # 简答题答案可能包含HTML标签（图片等），直接获取原始内容
             student_answer = request.form.get(f'answer_{question_id}', '').strip()
             
@@ -700,7 +711,6 @@ def submit_test():
     
     # 准备AI批改服务
     ai_service = get_ai_grading_service()
-    ai_scores = {}  # 存储AI批改的分数
     
     # 先进行AI批改（在数据库事务外）
     if ai_service.is_enabled():
@@ -715,7 +725,7 @@ def submit_test():
             
             if question and should_ai_grade:
                 try:
-                    # 获取题目分值
+                    # 获取题目分值（严格按照教师面板设置）
                     question_score = 0
                     if question.question_type == 'short_answer':
                         if isinstance(test_config, dict):
@@ -728,9 +738,7 @@ def submit_test():
                         else:
                             question_score = test_config.fill_blank_score or 0
                     
-                    # 如果题目本身有分值设置，优先使用题目分值
-                    if question.score and question.score > 0:
-                        question_score = question.score
+                    # 注意：不再使用题目本身的分值，严格按照教师面板设置计算
                     
                     # 调用AI批改服务
                     success, ai_result = ai_service.grade_answer(
@@ -742,14 +750,19 @@ def submit_test():
                     )
                     
                     if success:
+                        # 确保AI给出的分数不超过教师设置的分值
+                        actual_score = min(ai_result['score'], question_score)
+                        if actual_score != ai_result['score']:
+                            logger.warning(f"AI给出的分数({ai_result['score']})超过设定分值({question_score})，已调整为{actual_score}")
+                        
                         ai_scores[question_id] = {
-                            'score': ai_result['score'],
+                            'score': actual_score,
                             'feedback': ai_result['feedback'],
                             'success': True
                         }
-                        # 将AI评分加入总分
-                        total_score += ai_result['score']
-                        logger.info(f"AI批改成功 - 题目ID: {question_id}, 得分: {ai_result['score']}")
+                        # 将调整后的AI评分加入总分
+                        total_score += actual_score
+                        logger.info(f"AI批改成功 - 题目ID: {question_id}, 得分: {actual_score}/{question_score}")
                     else:
                         ai_scores[question_id] = {
                             'score': 0,
