@@ -823,6 +823,11 @@ def submit_test():
                     if ai_result['success']:
                         fb.ai_original_score = ai_result['score']
                         fb.ai_feedback = ai_result['feedback']
+                        # 如果有简短理由，将其保存到comment字段的开头
+                        if 'short_reason' in ai_result and ai_result['short_reason']:
+                            short_reason = ai_result['short_reason'].strip()
+                            if short_reason:
+                                fb.comment = f"扣分理由：{short_reason}。{ai_result['feedback']}"
                 else:
                     # 如果没有AI批改，使用传统的填空题评分逻辑
                     # 这里需要计算填空题的分数
