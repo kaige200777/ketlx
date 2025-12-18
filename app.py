@@ -601,6 +601,8 @@ def submit_test():
                     if student_fill_ins[i] == correct_fill_ins[i]:
                         fill_blank_score += score_per_fill_in
                 
+                # 对填空题分数进行四舍五入
+                fill_blank_score = round(fill_blank_score)
                 total_score += fill_blank_score
         elif question.question_type == 'short_answer':
             # 检查是否已经通过AI批改计算了分数
@@ -781,13 +783,16 @@ def submit_test():
     
     # 使用单个事务保存所有数据
     try:
+        # 对总分进行四舍五入，不保留小数
+        final_score = round(total_score)
+        
         # 创建测试结果记录
         result = TestResult(
             student_id=session['student_id'],
             student_name=session.get('student_name', ''),
             class_number=session.get('class_number', ''),
             test_id=test_id,
-            score=total_score,
+            score=final_score,
             answers=json.dumps(answers),
             ip_address=ip_addr
         )
@@ -867,7 +872,7 @@ def submit_test():
                             if student_fill_ins[i] == correct_fill_ins[i]:
                                 fill_blank_score += score_per_fill_in
                         
-                        fb.score = int(fill_blank_score)
+                        fb.score = round(fill_blank_score)
                         fb.graded_bool = True
                 
                 db.session.add(fb)
@@ -886,7 +891,7 @@ def submit_test():
     all_results = TestResult.query.filter_by(student_id=session['student_id']).all()
     test_count = len(all_results)
     total_score_sum = sum(r.score for r in all_results)
-    average_score = total_score_sum / test_count if test_count > 0 else 0
+    average_score = round(total_score_sum / test_count) if test_count > 0 else 0
     highest_score = max((r.score for r in all_results), default=0)
     lowest_score = min((r.score for r in all_results), default=0)
 
@@ -1339,8 +1344,8 @@ def grade_short_answer_by_result():
                 if sa_submission and sa_submission.score is not None:
                     total_score += sa_submission.score
         
-        # 更新测试结果的总分
-        result.score = total_score
+        # 更新测试结果的总分（四舍五入）
+        result.score = round(total_score)
         db.session.commit()
         
         # 更新学生历史记录
@@ -1348,7 +1353,7 @@ def grade_short_answer_by_result():
         all_results = TestResult.query.filter_by(student_id=student_id).all()
         test_count = len(all_results)
         total_score_sum = sum(r.score for r in all_results)
-        average_score = total_score_sum / test_count if test_count > 0 else 0
+        average_score = round(total_score_sum / test_count) if test_count > 0 else 0
         highest_score = max((r.score for r in all_results), default=0)
         lowest_score = min((r.score for r in all_results), default=0)
         
@@ -1451,8 +1456,8 @@ def grade_fill_blank(question_id, result_id):
                 if sa_submission and sa_submission.score is not None:
                     total_score += sa_submission.score
         
-        # 更新测试结果的总分
-        result.score = total_score
+        # 更新测试结果的总分（四舍五入）
+        result.score = round(total_score)
         db.session.commit()
         
         # 更新学生历史记录
@@ -1460,7 +1465,7 @@ def grade_fill_blank(question_id, result_id):
         all_results = TestResult.query.filter_by(student_id=student_id).all()
         test_count = len(all_results)
         total_score_sum = sum(r.score for r in all_results)
-        average_score = total_score_sum / test_count if test_count > 0 else 0
+        average_score = round(total_score_sum / test_count) if test_count > 0 else 0
         highest_score = max((r.score for r in all_results), default=0)
         lowest_score = min((r.score for r in all_results), default=0)
         

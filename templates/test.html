@@ -84,7 +84,10 @@
                 <h3 class="text-center">{{ test_title }}</h3>
             </div>
             <div class="card-body">
-                <form action="{{ url_for('submit_test') }}" method="post">
+                <form action="{{ url_for('submit_test') }}" method="post" autocomplete="off">
+                    <!-- 防止浏览器自动填充的随机token -->
+                    <input type="hidden" name="form_token" id="form_token" value="">
+                    <input type="hidden" name="test_session" id="test_session" value="">
                     {% if single_choice_questions %}
                     <div class="card mb-4">
                         <div class="card-header bg-primary text-white">
@@ -99,19 +102,19 @@
                                 <div class="card-body">
                                     <div class="fw-bold question-content">{{ question.content|replace('\n', '<br>')|safe }}</div>
                                     <div class="form-check">
-                                        <input class="form-check-input" type="radio" name="answer_{{ question.id }}" id="a{{ question.id }}" value="A">
+                                        <input class="form-check-input" type="radio" name="answer_{{ question.id }}" id="a{{ question.id }}" value="A" autocomplete="off">
                                         <label class="form-check-label" for="a{{ question.id }}">A. {{ question.option_a }}</label>
                                     </div>
                                     <div class="form-check">
-                                        <input class="form-check-input" type="radio" name="answer_{{ question.id }}" id="b{{ question.id }}" value="B">
+                                        <input class="form-check-input" type="radio" name="answer_{{ question.id }}" id="b{{ question.id }}" value="B" autocomplete="off">
                                         <label class="form-check-label" for="b{{ question.id }}">B. {{ question.option_b }}</label>
                                     </div>
                                     <div class="form-check">
-                                        <input class="form-check-input" type="radio" name="answer_{{ question.id }}" id="c{{ question.id }}" value="C">
+                                        <input class="form-check-input" type="radio" name="answer_{{ question.id }}" id="c{{ question.id }}" value="C" autocomplete="off">
                                         <label class="form-check-label" for="c{{ question.id }}">C. {{ question.option_c }}</label>
                                     </div>
                         <div class="form-check">
-                                        <input class="form-check-input" type="radio" name="answer_{{ question.id }}" id="d{{ question.id }}" value="D">
+                                        <input class="form-check-input" type="radio" name="answer_{{ question.id }}" id="d{{ question.id }}" value="D" autocomplete="off">
                                         <label class="form-check-label" for="d{{ question.id }}">D. {{ question.option_d }}</label>
                                     </div>
                                 </div>
@@ -135,19 +138,19 @@
                                 <div class="card-body">
                                     <div class="fw-bold question-content">{{ question.content|replace('\n', '<br>')|safe }}</div>
                                     <div class="form-check">
-                                        <input class="form-check-input" type="checkbox" name="answer_{{ question.id }}" id="a{{ question.id }}" value="A">
+                                        <input class="form-check-input" type="checkbox" name="answer_{{ question.id }}" id="a{{ question.id }}" value="A" autocomplete="off">
                                         <label class="form-check-label" for="a{{ question.id }}">A. {{ question.option_a }}</label>
                                     </div>
                                     <div class="form-check">
-                                        <input class="form-check-input" type="checkbox" name="answer_{{ question.id }}" id="b{{ question.id }}" value="B">
+                                        <input class="form-check-input" type="checkbox" name="answer_{{ question.id }}" id="b{{ question.id }}" value="B" autocomplete="off">
                                         <label class="form-check-label" for="b{{ question.id }}">B. {{ question.option_b }}</label>
                                     </div>
                                     <div class="form-check">
-                                        <input class="form-check-input" type="checkbox" name="answer_{{ question.id }}" id="c{{ question.id }}" value="C">
+                                        <input class="form-check-input" type="checkbox" name="answer_{{ question.id }}" id="c{{ question.id }}" value="C" autocomplete="off">
                                         <label class="form-check-label" for="c{{ question.id }}">C. {{ question.option_c }}</label>
                         </div>
                         <div class="form-check">
-                                        <input class="form-check-input" type="checkbox" name="answer_{{ question.id }}" id="d{{ question.id }}" value="D">
+                                        <input class="form-check-input" type="checkbox" name="answer_{{ question.id }}" id="d{{ question.id }}" value="D" autocomplete="off">
                                         <label class="form-check-label" for="d{{ question.id }}">D. {{ question.option_d }}</label>
                                     </div>
                                 </div>
@@ -171,11 +174,11 @@
                                 <div class="card-body">
                                     <div class="fw-bold question-content">{{ question.content|replace('\n', '<br>')|safe }}</div>
                                     <div class="form-check">
-                                        <input class="form-check-input" type="radio" name="answer_{{ question.id }}" id="true{{ question.id }}" value="正确">
+                                        <input class="form-check-input" type="radio" name="answer_{{ question.id }}" id="true{{ question.id }}" value="正确" autocomplete="off">
                                         <label class="form-check-label" for="true{{ question.id }}">正确</label>
                         </div>
                         <div class="form-check">
-                                        <input class="form-check-input" type="radio" name="answer_{{ question.id }}" id="false{{ question.id }}" value="错误">
+                                        <input class="form-check-input" type="radio" name="answer_{{ question.id }}" id="false{{ question.id }}" value="错误" autocomplete="off">
                                         <label class="form-check-label" for="false{{ question.id }}">错误</label>
                                     </div>
                                 </div>
@@ -202,7 +205,7 @@
                                         <div class="row g-2">
                                             {% for i in range(1, 5) %}
                                             <div class="col">
-                                                <input type="text" class="form-control" name="answer_{{ question.id }}_{{ i }}" placeholder="填空{{ i }}">
+                                                <input type="text" class="form-control" name="answer_{{ question.id }}_{{ i }}" placeholder="填空{{ i }}" autocomplete="off" data-question-id="{{ question.id }}" data-blank-index="{{ i }}">
                                             </div>
                                             {% endfor %}
                                         </div>
@@ -228,7 +231,7 @@
                                 <div class="card-body">
                                     <div class="fw-bold question-content">{{ question.content|replace('\n', '<br>')|safe }}</div>
                                     <div class="form-group">
-                                        <textarea class="form-control allow-img-paste" name="answer_{{ question.id }}" rows="4" placeholder="答案最多200字，可粘贴一张图片" maxlength="200" data-question-id="{{ question.id }}"></textarea>
+                                        <textarea class="form-control allow-img-paste" name="answer_{{ question.id }}" rows="4" placeholder="答案最多200字，可粘贴一张图片" maxlength="200" data-question-id="{{ question.id }}" autocomplete="off"></textarea>
                                         <small class="text-muted">已输入 <span id="charCount_{{ question.id }}">0</span>/200 字</small>
                                     </div>
                         </div>
@@ -280,6 +283,54 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{{ url_for('static', filename='js/paste_image.js') }}"></script>
     <script>
+    // 防止浏览器自动填充 - 页面加载时清空所有表单字段
+    window.addEventListener('load', function() {
+        // 设置随机token防止浏览器缓存表单数据
+        var timestamp = new Date().getTime();
+        var randomToken = 'test_' + timestamp + '_' + Math.random().toString(36).substr(2, 9);
+        document.getElementById('form_token').value = randomToken;
+        document.getElementById('test_session').value = 'session_' + timestamp;
+        
+        // 清空所有单选框和复选框的选中状态
+        document.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(function(input) {
+            input.checked = false;
+        });
+        
+        // 清空所有文本输入框和文本域
+        document.querySelectorAll('input[type="text"], textarea').forEach(function(input) {
+            input.value = '';
+        });
+        
+        // 重置字符计数器
+        document.querySelectorAll('[id^="charCount_"]').forEach(function(counter) {
+            counter.textContent = '0';
+        });
+    });
+    
+    // 防止浏览器前进后退时的自动填充
+    window.addEventListener('pageshow', function(event) {
+        if (event.persisted) {
+            // 页面从缓存中恢复，重新设置token并清空所有表单字段
+            var timestamp = new Date().getTime();
+            var randomToken = 'test_' + timestamp + '_' + Math.random().toString(36).substr(2, 9);
+            document.getElementById('form_token').value = randomToken;
+            document.getElementById('test_session').value = 'session_' + timestamp;
+            
+            document.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(function(input) {
+                input.checked = false;
+            });
+            
+            document.querySelectorAll('input[type="text"], textarea').forEach(function(input) {
+                input.value = '';
+            });
+            
+            // 重置字符计数器
+            document.querySelectorAll('[id^="charCount_"]').forEach(function(counter) {
+                counter.textContent = '0';
+            });
+        }
+    });
+    
     // 检查是否有简答题
     function hasShortAnswerQuestions() {
         return document.querySelectorAll('textarea[name^="answer_"]').length > 0;
