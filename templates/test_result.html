@@ -180,16 +180,7 @@
                             
                             {% if is_teacher %}
                             <div class="mt-3">
-                                {% if question.grading_method == 'ai' and question.ai_original_score is not none %}
-                                <div class="alert alert-info">
-                                    <small>
-                                        <strong>AI原始评分：</strong>{{ question.ai_original_score }}分<br>
-                                        {% if question.ai_feedback %}
-                                        <strong>AI反馈：</strong>{{ question.ai_feedback|safe }}
-                                        {% endif %}
-                                    </small>
-                                </div>
-                                {% endif %}
+                                <!-- 删除AI原始评分及评语内容显示 -->
                                 
                                 <form method="post" action="{{ url_for('grade_fill_blank', question_id=question.id, result_id=result.id) }}" class="d-inline">
                                     <div class="mb-2">
@@ -203,7 +194,7 @@
                                         <label for="comment-{{ question.id }}" class="form-label">
                                             {% if question.grading_method == 'ai' %}复核评语{% else %}评语{% endif %}（可选）：
                                         </label>
-                                        <textarea class="form-control" id="comment-{{ question.id }}" name="comment" rows="2">{{ question.comment if question.comment is not none else '' }}</textarea>
+                                        <textarea class="form-control" id="comment-{{ question.id }}" name="comment" rows="2">{% if question.grading_method == 'ai' %}{% else %}{{ question.comment if question.comment is not none else '' }}{% endif %}</textarea>
                                     </div>
                                     <button type="submit" class="btn btn-primary">
                                         {% if question.grading_method == 'ai' %}提交复核{% else %}提交评分{% endif %}
@@ -237,16 +228,7 @@
                             
                             {% if is_teacher %}
                             <div class="mt-3">
-                                {% if question.grading_method == 'ai' and question.ai_original_score is not none %}
-                                <div class="alert alert-info">
-                                    <small>
-                                        <strong>AI原始评分：</strong>{{ question.ai_original_score }}分<br>
-                                        {% if question.ai_feedback %}
-                                        <strong>AI反馈：</strong>{{ question.ai_feedback|safe }}
-                                        {% endif %}
-                                    </small>
-                                </div>
-                                {% endif %}
+                                <!-- 删除AI原始评分及评语内容显示 -->
                                 
                                 <form action="{{ url_for('grade_short_answer_by_result') }}" method="POST">
                                     <input type="hidden" name="result_id" value="{{ result.id }}">
@@ -263,7 +245,7 @@
                                         <label for="comment-{{ question.id }}" class="form-label">
                                             {% if question.grading_method == 'ai' %}复核评语{% else %}评语{% endif %}（可选）：
                                         </label>
-                                        <textarea class="form-control" id="comment-{{ question.id }}" name="comment" rows="2">{{ question.comment if question.comment is not none else '' }}</textarea>
+                                        <textarea class="form-control" id="comment-{{ question.id }}" name="comment" rows="2">{% if question.grading_method == 'ai' %}{% else %}{{ question.comment if question.comment is not none else '' }}{% endif %}</textarea>
                                     </div>
                                     <button type="submit" class="btn btn-primary">
                                         {% if question.grading_method == 'ai' %}提交复核{% else %}提交评分{% endif %}
