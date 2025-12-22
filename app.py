@@ -1544,52 +1544,95 @@ def import_questions(question_type):
             except Exception as e:
                 return jsonify({'success': False, 'message': f'Excel 文件读取失败: {str(e)}'}), 400
         
-        # 根据题型定义不同的列名要求
+        # 根据题型定义不同的列名要求（用于选项验证）
         if question_type == 'single_choice':
-            # 单选题：题干、选项A/B/C/D、正确答案、分值、答案解析
-            required_columns = ['题干', '选项A', '选项B', '选项C', '选项D', '正确答案', '分值']
-            content_col = '题干'
-            answer_col = '正确答案'
-            score_col = '分值'
-            explanation_col = '答案解析'
+            # 单选题需要验证选项A/B/C/D
+            required_options = ['选项A', '选项B', '选项C', '选项D']
         elif question_type == 'multiple_choice':
-            # 多选题：题干、选项A/B/C/D/E、正确答案、分值、解析
-            required_columns = ['题干', '选项A', '选项B', '选项C', '选项D', '正确答案', '分值']
-            content_col = '题干'
-            answer_col = '正确答案'
-            score_col = '分值'
-            explanation_col = '解析'
-        elif question_type == 'true_false':
-            # 判断题：题干、正确答案、分值、解析
-            required_columns = ['题干', '正确答案', '分值']
-            content_col = '题干'
-            answer_col = '正确答案'
-            score_col = '分值'
-            explanation_col = '解析'
-        elif question_type == 'fill_blank':
-            # 填空题：题干、正确答案、分值、解析
-            required_columns = ['题干', '正确答案', '分值']
-            content_col = '题干'
-            answer_col = '正确答案'
-            score_col = '分值'
-            explanation_col = '解析'
-        elif question_type == 'short_answer':
-            # 简答题：题目内容、参考答案、分值、解析
-            required_columns = ['题目内容', '参考答案', '分值']
-            content_col = '题目内容'
-            answer_col = '参考答案'
-            score_col = '分值'
-            explanation_col = '解析'
+            # 多选题需要验证选项A/B/C/D，选项E可选
+            required_options = ['选项A', '选项B', '选项C', '选项D']
         else:
-            return jsonify({'success': False, 'message': f'不支持的题型: {question_type}'}), 400
+            required_options = []
         
-        # 验证必需的列
-        missing_columns = [col for col in required_columns if col not in df.columns]
+        # 验证选择题的选项列
+        if required_options:
+            missing_options = [opt for opt in required_options if opt not in df.columns]
+            if missing_options:
+                available_cols = ', '.join(df.columns.tolist())
+                return jsonify({
+                    'success': False,
+                    'message': f'缺少必需的选项列: {", ".join(missing_options)}。文件中的列: {available_cols}'
+                }), 400
+        
+        # 验证必需的列 - 支持灵活的列名映射
+        def find_column_mapping(df_columns, possible_names):
+            """查找列名映射，支持多种可能的列名"""
+            for possible_name in possible_names:
+                if possible_name in df_columns:
+                    return possible_name
+            return None
+        
+        # 创建列名映射
+        column_mapping = {}
+        
+        # 根据题型定义可能的列名
+        if question_type == 'single_choice':
+            content_possibilities = ['题干', '题目', '题目内容']
+            answer_possibilities = ['正确答案', '答案']
+            score_possibilities = ['分值', '分数']
+            explanation_possibilities = ['答案解析', '解析', '说明']
+        elif question_type == 'multiple_choice':
+            content_possibilities = ['题干', '题目', '题目内容']
+            answer_possibilities = ['正确答案', '答案']
+            score_possibilities = ['分值', '分数']
+            explanation_possibilities = ['解析', '答案解析', '说明']
+        elif question_type == 'true_false':
+            content_possibilities = ['题干', '题目', '题目内容']
+            answer_possibilities = ['正确答案', '答案']
+            score_possibilities = ['分值', '分数']
+            explanation_possibilities = ['解析', '答案解析', '说明']
+        elif question_type == 'fill_blank':
+            content_possibilities = ['题干', '题目', '题目内容']
+            answer_possibilities = ['正确答案', '答案']
+            score_possibilities = ['分值', '分数']
+            explanation_possibilities = ['解析', '答案解析', '说明']
+        elif question_type == 'short_answer':
+            content_possibilities = ['题目', '题干', '题目内容']
+            answer_possibilities = ['参考答案', '正确答案', '答案']
+            score_possibilities = ['分值', '分数']
+            explanation_possibilities = ['解析', '答案解析', '说明']
+        
+        # 查找实际的列名
+        content_col = find_column_mapping(df.columns, content_possibilities)
+        answer_col = find_column_mapping(df.columns, answer_possibilities)
+        score_col = find_column_mapping(df.columns, score_possibilities)
+        explanation_col = find_column_mapping(df.columns, explanation_possibilities)
+        
+        # 验证必需的列是否存在
+        missing_columns = []
+        if not content_col:
+            missing_columns.append(f"题目内容列（支持：{', '.join(content_possibilities)}）")
+        
+        # 对于简答题，答案和分值是可选的
+        if question_type != 'short_answer':
+            if not answer_col:
+                missing_columns.append(f"答案列（支持：{', '.join(answer_possibilities)}）")
+            if not score_col:
+                missing_columns.append(f"分值列（支持：{', '.join(score_possibilities)}）")
+        else:
+            # 简答题的答案和分值列是可选的，但如果存在就使用
+            if not answer_col:
+                # 如果没有找到答案列，使用空字符串作为默认值
+                answer_col = None
+            if not score_col:
+                # 如果没有找到分值列，使用0作为默认值
+                score_col = None
+        
         if missing_columns:
             available_cols = ', '.join(df.columns.tolist())
             return jsonify({
                 'success': False,
-                'message': f'缺少必需的列: {", ".join(missing_columns)}。文件中的列: {available_cols}'
+                'message': f'缺少必需的列: {"; ".join(missing_columns)}。文件中的列: {available_cols}'
             }), 400
         
         # 创建或获取题库
@@ -1605,17 +1648,60 @@ def import_questions(question_type):
         
         for index, row in df.iterrows():
             try:
-                # 验证必填字段
-                if pd.isna(row[content_col]) or pd.isna(row[answer_col]) or pd.isna(row[score_col]):
-                    errors.append(f'第 {index + 2} 行：题目、正确答案或分值为空')
+                # 验证必填字段 - 题目内容始终必填
+                if pd.isna(row[content_col]) or str(row[content_col]).strip() == '':
+                    errors.append(f'第 {index + 2} 行：题目内容不能为空')
                     continue
+                
+                # 对于简答题，允许参考答案、分值、解析为空
+                if question_type == 'short_answer':
+                    # 简答题只要求题目内容不为空
+                    content = str(row[content_col]).strip()
+                    
+                    # 处理答案列：如果列不存在或为空，使用空字符串
+                    if answer_col and not pd.isna(row[answer_col]):
+                        answer = str(row[answer_col]).strip()
+                    else:
+                        answer = ''
+                    
+                    # 处理分值列：如果列不存在或为空，使用0
+                    if score_col and not pd.isna(row[score_col]) and str(row[score_col]).strip() != '':
+                        try:
+                            score = int(row[score_col])
+                            if score < 0:
+                                score = 0  # 负数分值设为0
+                        except (ValueError, TypeError):
+                            score = 0  # 无效分值设为0
+                    else:
+                        score = 0
+                else:
+                    # 其他题型要求答案和分值不为空
+                    if pd.isna(row[answer_col]) or str(row[answer_col]).strip() == '':
+                        errors.append(f'第 {index + 2} 行：正确答案不能为空')
+                        continue
+                    
+                    if pd.isna(row[score_col]):
+                        errors.append(f'第 {index + 2} 行：分值不能为空')
+                        continue
+                    
+                    try:
+                        score = int(row[score_col])
+                        if score < 0:
+                            errors.append(f'第 {index + 2} 行：分值不能为负数')
+                            continue
+                    except (ValueError, TypeError):
+                        errors.append(f'第 {index + 2} 行：分值必须为有效数字')
+                        continue
+                    
+                    content = str(row[content_col]).strip()
+                    answer = str(row[answer_col]).strip()
                 
                 # 创建题目对象
                 question = Question(
                     question_type=question_type,
-                    content=str(row[content_col]).strip(),
-                    correct_answer=str(row[answer_col]).strip(),
-                    score=int(row[score_col]),
+                    content=content,
+                    correct_answer=answer,
+                    score=score,
                     bank_id=question_bank.id
                 )
                 
