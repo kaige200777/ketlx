@@ -347,7 +347,7 @@ docker run -d -p 8000:8000 test-system
 ## 📁 项目结构
 
 ```
-课堂测试系统/
+课堂学习任务单系统/
 ├── app.py                  # 主应用程序文件
 ├── run.py                  # 运行脚本
 ├── wsgl.py                 # WSGI 入口文件
